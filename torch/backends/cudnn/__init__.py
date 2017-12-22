@@ -1,101 +1,94 @@
-import torch._C as _C
+import os
 import ctypes
-import warnings
-import torch.cuda
 import sys
-import os.path as path
+import torch
+import warnings
+from torch.version import cuda
+from contextlib import contextmanager
+from subprocess import Popen, PIPE
 
-enabled = True  # set to False to globally disable cuDNN
+# Write:
+#
+#   torch.backends.cudnn.enabled = False
+#
+# to globally disable CuDNN
 
 lib = None
-# TODO: fix libname for Windows
+__cudnn_version = None
 # TODO: dynamic version checks via cudnnGetVersion
-# TODO: load 5.1.3 if using CUDA 7.5 and 5.1.5 if using CUDA 8.0
-thisdir = path.dirname(__file__)
-libpaths = ['', path.join(thisdir, '../../lib')]
-if sys.platform.startswith('linux'):
-    libnames = ['libcudnn.so.5.1.5', 'libcudnn.so.5.1.3', 'libcudnn.so.5.0.5', 'libcudnn.so.5.1.10']
-elif sys.platform == 'darwin':
-    libnames = ['libcudnn.5.dylib']
-else:
-    libnames = []
 
-def _loadlib():
-    global lib
-    loaded = False
-    for libpath in libpaths:
-        for libname in libnames:
-            try:
-                lib = ctypes.cdll.LoadLibrary(path.join(libpath, libname))
-                loaded = True
-                break
-            except OSError:
-                continue
-        if loaded:
-            break
-    if loaded:
-        lib.cudnnGetErrorString.restype = ctypes.c_char_p
+
+def find_cudnn_windows_lib():
+    proc = Popen(['where', 'cudnn64*.dll'], stdout=PIPE, stderr=PIPE)
+    out, err = proc.communicate()
+    out = out.decode().strip()
+    if len(out) > 0:
+        if out.find('\r\n') != -1:
+            out = out.split('\r\n')[0]
+        cudnn_lib_name = os.path.basename(out)
+        cudnn_lib = os.path.splitext(cudnn_lib_name)[0]
+        cudnn_lib = str(cudnn_lib)
+        return ctypes.cdll.LoadLibrary(cudnn_lib)
     else:
-        lib = None
-        raise OSError("Could not load cuDNN")
+        return None
+
+
+def _libcudnn():
+    global lib, __cudnn_version
+    if lib is None:
+        if sys.platform == "win32":
+            lib = find_cudnn_windows_lib()
+        else:
+            lib = ctypes.cdll.LoadLibrary(None)
+        if hasattr(lib, 'cudnnGetErrorString'):
+            lib.cudnnGetErrorString.restype = ctypes.c_char_p
+            __cudnn_version = lib.cudnnGetVersion()
+            compile_version = torch._C._cudnn_version()
+            # Check that cuDNN major and minor versions match
+            if (__cudnn_version // 100) != (compile_version // 100):
+                raise RuntimeError(
+                    'cuDNN version mismatch: PyTorch was compiled against {} '
+                    'but linked against {}'.format(compile_version, __cudnn_version))
+        else:
+            lib = None
+    return lib
+
+
+def version():
+    if _libcudnn() is None:
+        return None
+    return __cudnn_version
+
 
 def is_acceptable(tensor):
-    if not enabled:
+    if not torch._C._get_cudnn_enabled():
         return False
     if not (isinstance(tensor, torch.cuda.HalfTensor) or
             isinstance(tensor, torch.cuda.FloatTensor) or
             isinstance(tensor, torch.cuda.DoubleTensor)):
         return False
-    if lib is None:
-        try:
-            _loadlib()
-        except Exception:
-            warnings.warn('cuDNN library not found. Check your {libpath}'.format(
-                libpath={
-                    'darwin': 'DYLD_LIBRARY_PATH',
-                    'win32': 'PATH'
-                }.get(sys.platform, 'LD_LIBRARY_PATH')))
-            return False
-    if not _C.has_cudnn:
-        warnings.warn("cuDNN library has been detected, but your pytorch "
-                "installation was compiled without support for it. You "
-                "might want to rebuild pytorch, making sure the library "
-                "is visible to the build system.")
+    if not torch._C.has_cudnn:
+        warnings.warn(
+            "PyTorch was compiled without cuDNN support. To use cuDNN, rebuild "
+            "PyTorch making sure the library is visible to the build system.")
+        return False
+    if _libcudnn() is None:
+        warnings.warn('cuDNN library not found. Check your {libpath}'.format(
+            libpath={
+                'darwin': 'DYLD_LIBRARY_PATH',
+                'win32': 'PATH'
+            }.get(sys.platform, 'LD_LIBRARY_PATH')))
         return False
     return True
 
-__cudnn_version = []
-def version():
-    if not lib:
-        raise RuntimeError("cuDNN not initialized")
-    if len(__cudnn_version) == 0:
-        __cudnn_version.append(lib.cudnnGetVersion())
-    return __cudnn_version[0]
 
 _handles = {}
 
-benchmark = False
 verbose = False
-workspace_limit = None
 
 CUDNN_DATA_FLOAT = 0
 CUDNN_DATA_DOUBLE = 1
 CUDNN_DATA_HALF = 2
-
-CUDNN_CONVOLUTION = 0
-CUDNN_CROSS_CORRELATION = 1
-
-CUDNN_CONVOLUTION_FWD_NO_WORKSPACE = 0
-CUDNN_CONVOLUTION_FWD_PREFER_FASTEST = 1
-CUDNN_CONVOLUTION_FWD_SPECIFY_WORKSPACE_LIMIT = 2
-
-CUDNN_CONVOLUTION_BWD_FILTER_NO_WORKSPACE = 0
-CUDNN_CONVOLUTION_BWD_FILTER_PREFER_FASTEST = 1
-CUDNN_CONVOLUTION_BWD_FILTER_SPECIFY_WORKSPACE_LIMIT = 2
-
-CUDNN_CONVOLUTION_BWD_DATA_NO_WORKSPACE = 0
-CUDNN_CONVOLUTION_BWD_DATA_PREFER_FASTEST = 1
-CUDNN_CONVOLUTION_BWD_DATA_SPECIFY_WORKSPACE_LIMIT = 2
 
 CUDNN_TENSOR_NCHW = 0
 CUDNN_TENSOR_NHWC = 1
@@ -108,6 +101,37 @@ CUDNN_GRU = 3
 CUDNN_LINEAR_INPUT = 0
 CUDNN_SKIP_INPUT = 1
 
+CUDNN_RNN_ALGO_STANDARD = 0
+CUDNN_RNN_ALGO_PERSIST_STATIC = 1
+CUDNN_RNN_ALGO_PERSIST_DYNAMIC = 2
+
+CUDNN_DEFAULT_MATH = 0
+CUDNN_TENSOR_OP_MATH = 1
+
+
+def set_flags(_enabled, _benchmark, _deterministic, _verbose):
+    global benchmark, deterministic, verbose
+    orig_flags = (torch._C._get_cudnn_enabled(),
+                  torch._C._get_cudnn_benchmark(),
+                  torch._C._get_cudnn_deterministic(),
+                  verbose)
+    verbose = _verbose
+    torch._C._set_cudnn_enabled(_enabled)
+    torch._C._set_cudnn_benchmark(_benchmark)
+    torch._C._set_cudnn_deterministic(_deterministic)
+    return orig_flags
+
+
+@contextmanager
+def flags(enabled=False, benchmark=False, deterministic=False, verbose=False):
+    orig_flags = set_flags(enabled, benchmark, deterministic, verbose)
+    try:
+        yield
+    finally:
+        # recover the previous values
+        set_flags(orig_flags[0], orig_flags[1], orig_flags[2], orig_flags[3])
+
+
 class CuDNNHandle:
     def __init__(self):
         ptr = ctypes.c_void_p()
@@ -116,6 +140,7 @@ class CuDNNHandle:
 
     def __del__(self):
         check_error(lib.cudnnDestroy(self))
+
 
 class CuDNNError(RuntimeError):
     def __init__(self, status):
@@ -161,39 +186,20 @@ class TensorDescriptorArray(object):
     def __getitem__(self, key):
         return ctypes.c_void_p(self.ptrs[key])
 
-    def set(self, tensor):
-        self._type = tensor.type()
-        self._size = tensor.size()
-        self._stride = tensor.stride()
+    def set_all(self, tensor):
+        _type = _typemap[tensor.type()]
+        _ndim = tensor.dim()
+        _size = int_array(tensor.size())
+        _stride = int_array(tensor.stride())
         for ptr in self.ptrs:
             check_error(lib.cudnnSetTensorNdDescriptor(
-                ctypes.c_void_p(ptr), _typemap[tensor.type()], tensor.dim(),
-                int_array(tensor.size()), int_array(tensor.stride())))
+                ctypes.c_void_p(ptr), _type, _ndim, _size, _stride))
 
-    def as_tuple(self):
-        return (self._type, tuple(self._size), tuple(self._stride))
+    def set_raw(self, i, _type, _ndim, _size, _stride):
+        ptr = self.ptrs[i]
+        check_error(lib.cudnnSetTensorNdDescriptor(
+            ctypes.c_void_p(ptr), _type, _ndim, _size, _stride))
 
-
-class ConvolutionDescriptor(object):
-    def __init__(self):
-        ptr = ctypes.c_void_p()
-        check_error(lib.cudnnCreateConvolutionDescriptor(ctypes.byref(ptr)))
-        self._as_parameter_ = ptr
-
-    def __del__(self):
-        check_error(lib.cudnnDestroyConvolutionDescriptor(self._as_parameter_))
-        del self._as_parameter_
-
-    def set(self, typename, pad, stride):
-        self._pad = pad
-        self._stride = stride
-        upscale = int_array([1, 1])
-        check_error(lib.cudnnSetConvolutionNdDescriptor(
-            self, 2, int_array(pad), int_array(stride), upscale,
-            CUDNN_CROSS_CORRELATION, _typemap[typename]))
-
-    def as_tuple(self):
-        return (self._pad, self._stride)
 
 class FilterDescriptor(object):
     def __init__(self):
@@ -209,7 +215,8 @@ class FilterDescriptor(object):
         self._size = weight.size()
         datatype = _typemap[weight.type()]
         check_error(lib.cudnnSetFilterNdDescriptor(
-            self, datatype, CUDNN_TENSOR_NCHW, weight.ndimension(), int_array(weight.size())))
+            self, datatype, CUDNN_TENSOR_NCHW, weight.ndimension(),
+            int_array(weight.size())))
 
     def as_tuple(self):
         return tuple(self._size)
@@ -219,75 +226,105 @@ class DropoutDescriptor(object):
     def __init__(self, handle, dropout, seed):
         ptr = ctypes.c_void_p()
         check_error(lib.cudnnCreateDropoutDescriptor(ctypes.byref(ptr)))
+
         self._as_parameter_ = ptr
+        self.state = None
+        self.dropout = dropout
+        self.handle = handle
 
-        dropout_states_size = ctypes.c_long()
-        check_error(lib.cudnnDropoutGetStatesSize(
-            handle,
-            ctypes.byref(dropout_states_size)))
+        self._set(dropout, seed)
 
-        self.state = torch.cuda.ByteTensor(dropout_states_size.value)
+    def set_dropout(self, dropout, seed):
+        if dropout != self.dropout:
+            self._set(dropout, seed)
+
+    def _set(self, dropout, seed):
+        if self.state is None and dropout > 0:
+            dropout_states_size = ctypes.c_long()
+            check_error(lib.cudnnDropoutGetStatesSize(
+                self.handle,
+                ctypes.byref(dropout_states_size)))
+            self.state = torch.cuda.ByteTensor(dropout_states_size.value)
+            state_ptr = self.state.data_ptr()
+            state_size = self.state.size(0)
+        else:
+            state_ptr = None
+            state_size = 0
 
         check_error(lib.cudnnSetDropoutDescriptor(
             self,
-            handle,
+            self.handle,
             ctypes.c_float(dropout),
-            ctypes.c_void_p(self.state.data_ptr()),
-            ctypes.c_size_t(self.state.size(0)),
+            ctypes.c_void_p(state_ptr),
+            ctypes.c_size_t(state_size),
             ctypes.c_ulonglong(seed),
         ))
+
+        self.dropout = dropout
 
     def __del__(self):
         check_error(lib.cudnnDestroyDropoutDescriptor(self))
 
 
-
 class RNNDescriptor(object):
-    def __init__(self, hidden_size, num_layers, dropout_desc, input_mode,
-            bidirectional, mode, datatype):
+    def __init__(self, handle, hidden_size, num_layers, dropout_desc, input_mode,
+                 bidirectional, mode, datatype):
         ptr = ctypes.c_void_p()
         check_error(lib.cudnnCreateRNNDescriptor(ctypes.byref(ptr)))
         self._as_parameter_ = ptr
-
-        check_error(lib.cudnnSetRNNDescriptor(
-            self,
-            hidden_size,
-            num_layers,
-            dropout_desc,
-            input_mode,
-            bidirectional,
-            mode,
-            datatype
-        ))
+        if version() >= 6000:
+            check_error(lib.cudnnSetRNNDescriptor_v6(
+                handle,
+                self,
+                hidden_size,
+                num_layers,
+                dropout_desc,
+                input_mode,
+                bidirectional,
+                mode,
+                CUDNN_RNN_ALGO_STANDARD,
+                datatype
+            ))
+            if version() >= 7000 and int(cuda[0]) >= 9 and (
+                    torch.cuda.get_device_capability(torch.cuda.current_device())[0] >= 7):
+                lib.cudnnSetRNNMatrixMathType(self, CUDNN_DEFAULT_MATH)
+                if datatype == CUDNN_DATA_HALF:
+                    lib.cudnnSetRNNMatrixMathType(self, CUDNN_TENSOR_OP_MATH)
+        else:
+            check_error(lib.cudnnSetRNNDescriptor(
+                self,
+                hidden_size,
+                num_layers,
+                dropout_desc,
+                input_mode,
+                bidirectional,
+                mode,
+                datatype
+            ))
 
     def __del__(self):
         check_error(lib.cudnnDestroyRNNDescriptor(self))
 
 
-class ConvolutionAlgoPerf(ctypes.Structure):
-    _fields_ = [
-        ("algo", ctypes.c_int),
-        ("status", ctypes.c_int),
-        ("time", ctypes.c_float),
-        ("memory", ctypes.c_size_t),
-    ]
-
 def check_error(status):
     if status is not 0:
         raise CuDNNError(status)
 
+
 def get_error_string(status):
     return lib.cudnnGetErrorString(status)
 
+
 def get_handle():
-    if lib is None:
-        _loadlib()
+    if _libcudnn() is None:
+        raise RuntimeError('cuDNN not available')
     current_device = torch.cuda.current_device()
     handle = _handles.get(current_device, None)
     if handle is None:
         handle = CuDNNHandle()
         _handles[current_device] = handle
     return handle
+
 
 _typemap = {
     'torch.cuda.HalfTensor': CUDNN_DATA_HALF,
@@ -296,10 +333,11 @@ _typemap = {
 }
 
 _sizeofmap = {
-    CUDNN_DATA_HALF : 2,
-    CUDNN_DATA_FLOAT : 4,
-    CUDNN_DATA_DOUBLE : 8,
+    CUDNN_DATA_HALF: 2,
+    CUDNN_DATA_FLOAT: 4,
+    CUDNN_DATA_DOUBLE: 8,
 }
+
 
 def c_type(tensor):
     if isinstance(tensor, torch.cuda.HalfTensor):
@@ -311,127 +349,68 @@ def c_type(tensor):
     else:
         raise ValueError("unknown type '{}'".format(type(tensor)))
 
+
 def int_array(itr):
     array_type = ctypes.c_int * len(itr)
     return array_type(*itr)
 
+
 def descriptor(tensor, N=None):
+    padded_size = tensor.size() + ((1,) * (5 - tensor.dim()))
+    tensor = tensor.view(padded_size)
     if N is not None:
         descriptor = TensorDescriptorArray(N)
+        descriptor.set_all(tensor)
     else:
         descriptor = TensorDescriptor()
-    if tensor.dim() == 2:
-        tensor = tensor.view(tensor.size(0), tensor.size(1), 1, 1)
-    elif tensor.dim() == 3:
-        tensor = tensor.view(tensor.size(0), tensor.size(1), tensor.size(2), 1)
-    descriptor.set(tensor)
+        descriptor.set(tensor)
     return descriptor
 
-_autotuner_forward = {}
-_autotuner_backward_data = {}
-_autotuner_backward_filter = {}
 
-def convolution_autotuner_key(idesc, weight_desc, conv_desc):
-    return (idesc.as_tuple(), weight_desc.as_tuple(), conv_desc.as_tuple())
+def descriptor_sequence(tensor, batch_sizes):
+    descriptors = TensorDescriptorArray(len(batch_sizes))
+    _type = _typemap[tensor.type()]
+    _ndim = 5
+    dim_pad = (1,) * (5 - tensor.dim())
+    _size = int_array(tensor.size() + dim_pad)
+    _stride = int_array(tensor.stride() + dim_pad)
+    for i, batch_size in enumerate(batch_sizes):
+        _size[0] = batch_size
+        descriptors.set_raw(i, _type, _ndim, _size, _stride)
+    return descriptors
 
-def convolution_forward_algorithm(idesc, weight_desc, conv_desc, odesc):
-    k = convolution_autotuner_key(idesc, weight_desc, conv_desc)
-    if k in _autotuner_forward:
-        return _autotuner_forward[k]
-
-    if benchmark:
-        perf_results = ConvolutionAlgoPerf()
-        algo_count = ctypes.c_int()
-        check_error(lib.cudnnFindConvolutionForwardAlgorithm(
-            get_handle(), idesc, weight_desc, conv_desc, odesc, 1,
-            ctypes.byref(algo_count), ctypes.byref(perf_results)))
-        _autotuner_forward[k] = perf_results.algo
-        return perf_results.algo
-
-    search_mode = CUDNN_CONVOLUTION_FWD_PREFER_FASTEST
-    wlimit = 0
-    if workspace_limit is not None:
-        wlimit = workspace_limit
-        search_mode = CUDNN_CONVOLUTION_FWD_SPECIFY_WORKSPACE_LIMIT
-
-    fwd_alg = ctypes.c_int()
-    check_error(lib.cudnnGetConvolutionForwardAlgorithm(
-        get_handle(), idesc, weight_desc, conv_desc, odesc, search_mode,
-        wlimit, ctypes.byref(fwd_alg)))
-    return fwd_alg
-
-def convolution_forward_workspace_size(*args):
-    check_error(lib.cudnnGetConvolutionForwardWorkspaceSize(*args))
-
-def convolution_forward(*args):
-    check_error(lib.cudnnConvolutionForward(*args))
-
-def convolution_backward_data(*args):
-    return check_error(lib.cudnnConvolutionBackwardData(*args))
-
-def convolution_backward_data_algorithm(weight_desc, odesc, conv_desc, idesc):
-    k = convolution_autotuner_key(idesc, weight_desc, conv_desc)
-    if k in _autotuner_backward_data:
-        return _autotuner_backward_data[k]
-
-    if benchmark:
-        perf_results = ConvolutionAlgoPerf()
-        algo_count = ctypes.c_int()
-        check_error(lib.cudnnFindConvolutionBackwardDataAlgorithm(
-            get_handle(), weight_desc, odesc, conv_desc, idesc, 1,
-            ctypes.byref(algo_count), ctypes.byref(perf_results)))
-        _autotuner_backward_data[k] = perf_results.algo
-        return perf_results.algo
-
-    search_mode = CUDNN_CONVOLUTION_BWD_DATA_PREFER_FASTEST
-    wlimit = 0
-    if workspace_limit is not None:
-        wlimit = workspace_limit
-        search_mode = CUDNN_CONVOLUTION_BWD_DATA_SPECIFY_WORKSPACE_LIMIT
-
-    bwd_data_alg = ctypes.c_int()
-    check_error(lib.cudnnGetConvolutionBackwardDataAlgorithm(
-        get_handle(), weight_desc, odesc, conv_desc, idesc, search_mode,
-        wlimit, ctypes.byref(bwd_data_alg)))
-    return bwd_data_alg
-
-def convolution_backward_data_workspace_size(*args):
-    return check_error(lib.cudnnGetConvolutionBackwardDataWorkspaceSize(*args))
-
-def convolution_backward_filter(*args):
-    return check_error(lib.cudnnConvolutionBackwardFilter(*args))
-
-def convolution_backward_filter_algorithm(idesc, odesc, conv_desc, weight_desc):
-    k = convolution_autotuner_key(idesc, weight_desc, conv_desc)
-    if k in _autotuner_backward_filter:
-        return _autotuner_backward_filter[k]
-
-    if benchmark:
-        perf_results = ConvolutionAlgoPerf()
-        algo_count = ctypes.c_int()
-        check_error(lib.cudnnFindConvolutionBackwardFilterAlgorithm(
-            get_handle(), idesc, odesc, conv_desc, weight_desc, 1,
-            ctypes.byref(algo_count), ctypes.byref(perf_results)))
-        _autotuner_backward_filter[k] = perf_results.algo
-        return perf_results.algo
-
-    search_mode = CUDNN_CONVOLUTION_BWD_FILTER_PREFER_FASTEST
-    wlimit = 0
-    if workspace_limit is not None:
-        wlimit = workspace_limit
-        search_mode = CUDNN_CONVOLUTION_BWD_FILTER_SPECIFY_WORKSPACE_LIMIT
-
-    bwd_filter_alg = ctypes.c_int()
-    check_error(lib.cudnnGetConvolutionBackwardFilterAlgorithm(
-        get_handle(), idesc, odesc, conv_desc, weight_desc, search_mode,
-        wlimit, ctypes.byref(bwd_filter_alg)))
-    return bwd_filter_alg
-
-def convolution_backward_filter_workspace_size(*args):
-    return check_error(lib.cudnnGetConvolutionBackwardFilterWorkspaceSize(*args))
-
-def convolution_backward_bias(*args):
-    check_error(lib.cudnnConvolutionBackwardBias(*args))
 
 def add_tensor(*args):
     check_error(lib.cudnnAddTensor(*args))
+
+
+# The magic here is to allow us to intercept code like this:
+#
+#   torch.backends.cudnn.enabled = True
+
+class ContextProp(object):
+    def __init__(self, getter, setter):
+        self.getter = getter
+        self.setter = setter
+
+    def __get__(self, obj, objtype):
+        return self.getter()
+
+    def __set__(self, obj, val):
+        self.setter(val)
+
+
+class CudnnModule(object):
+    def __init__(self, m):
+        self.__dict__ = m.__dict__
+        # You have to retain the old module, otherwise it will
+        # get GC'ed and a lot of things will break.  See:
+        # https://stackoverflow.com/questions/47540722/how-do-i-use-the-sys-modules-replacement-trick-in-init-py-on-python-2
+        self.__old_mod = m
+    enabled = ContextProp(torch._C._get_cudnn_enabled, torch._C._set_cudnn_enabled)
+    deterministic = ContextProp(torch._C._get_cudnn_deterministic, torch._C._set_cudnn_deterministic)
+    benchmark = ContextProp(torch._C._get_cudnn_benchmark, torch._C._set_cudnn_benchmark)
+
+# This is the sys.modules replacement trick, see
+# https://stackoverflow.com/questions/2447353/getattr-on-a-module/7668273#7668273
+sys.modules[__name__] = CudnnModule(sys.modules[__name__])

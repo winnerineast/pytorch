@@ -1,6 +1,7 @@
 import torch
 from .Module import Module
-from .utils import recursiveCopy
+from .utils import recursiveCopy, clear
+
 
 class SelectTable(Module):
 
@@ -48,7 +49,8 @@ class SelectTable(Module):
             del self.output[:]
         return super(SelectTable, self).type(type, tensorCache)
 
-
     def __repr__(self):
         return super(SelectTable, self).__repr__() + '({})'.format(self.index)
 
+    def clearState(self):
+        clear(self, 'gradInput')

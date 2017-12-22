@@ -9,6 +9,8 @@ from .Replicate import Replicate
 from .CSubTable import CSubTable
 from .CDivTable import CDivTable
 from .utils import clear
+import warnings
+
 
 class SpatialSubtractiveNormalization(Module):
 
@@ -24,19 +26,19 @@ class SpatialSubtractiveNormalization(Module):
 
         # check args
         if kdim != 2 and kdim != 1:
-           raise ValueError('SpatialSubtractiveNormalization averaging kernel must be 2D or 1D')
+            raise ValueError('SpatialSubtractiveNormalization averaging kernel must be 2D or 1D')
 
         if (self.kernel.size(0) % 2) == 0 or (kdim == 2 and (self.kernel.size(1) % 2) == 0):
-           raise ValueError('SpatialSubtractiveNormalization averaging kernel must have ODD dimensions')
+            raise ValueError('SpatialSubtractiveNormalization averaging kernel must have ODD dimensions')
 
         # normalize kernel
         self.kernel.div_(self.kernel.sum() * self.nInputPlane)
 
         # padding values
-        padH = int(math.floor(self.kernel.size(0)/2))
+        padH = int(math.floor(self.kernel.size(0) / 2))
         padW = padH
         if kdim == 2:
-           padW = int(math.floor(self.kernel.size(1)/2))
+            padW = int(math.floor(self.kernel.size(1) / 2))
 
         # create convolutional mean extractor
         self.meanestimator = Sequential()
@@ -45,7 +47,8 @@ class SpatialSubtractiveNormalization(Module):
             self.meanestimator.add(SpatialConvolution(self.nInputPlane, 1, self.kernel.size(1), self.kernel.size(0)))
         else:
             # TODO: map
-            self.meanestimator.add(SpatialConvolutionMap(SpatialConvolutionMap.maps.oneToOne(self.nInputPlane), self.kernel.size(0), 1))
+            self.meanestimator.add(SpatialConvolutionMap(
+                SpatialConvolutionMap.maps.oneToOne(self.nInputPlane), self.kernel.size(0), 1))
             self.meanestimator.add(SpatialConvolution(self.nInputPlane, 1, 1, self.kernel.size(0)))
 
         self.meanestimator.add(Replicate(self.nInputPlane, 0))
@@ -57,8 +60,8 @@ class SpatialSubtractiveNormalization(Module):
             self.meanestimator.modules[1].bias.zero_()
         else:
             for i in range(self.nInputPlane):
-                self.meanestimator.modules[1].weight[i].copy_(self.kernel)
-                self.meanestimator.modules[2].weight[0][i].copy_(self.kernel)
+                self.meanestimator.modules[1].weight[i].copy_(self.kernel, broadcast=False)
+                self.meanestimator.modules[2].weight[0][i].copy_(self.kernel, broadcast=False)
 
             self.meanestimator.modules[1].bias.zero_()
             self.meanestimator.modules[2].bias.zero_()
@@ -76,7 +79,9 @@ class SpatialSubtractiveNormalization(Module):
     def updateOutput(self, input):
         # compute side coefficients
         dim = input.dim()
-        if input.dim() + 1 != self.coef.dim() or (input.size(dim-1) != self.coef.size(dim-1)) or (input.size(dim-2) != self.coef.size(dim-2)):
+        if (input.dim() + 1 != self.coef.dim() or
+                (input.size(dim - 1) != self.coef.size(dim - 1)) or
+                (input.size(dim - 2) != self.coef.size(dim - 2))):
             if self.ones is None:
                 self.ones = input.new()
             if self._coef is None:
@@ -84,15 +89,16 @@ class SpatialSubtractiveNormalization(Module):
 
             self.ones.resize_as_(input[0:1]).fill_(1)
             coef = self.meanestimator.updateOutput(self.ones).squeeze(0)
-            self._coef.resize_as_(coef).copy_(coef) # make contiguous for view
+            self._coef.resize_as_(coef).copy_(coef)  # make contiguous for view
             size = list(coef.size())
             size = [input.size(0)] + size
             self.coef = self._coef.view(1, *self._coef.size()).expand(*size)
 
         # compute mean
         self.localsums = self.meanestimator.updateOutput(input)
-        self.adjustedsums = self.divider.updateOutput([self.localsums, self.coef])
-        self.output = self.subtractor.updateOutput([input, self.adjustedsums])
+        self.adjustedsums = (self.divider.updateOutput(
+            [self.localsums, self.coef.contiguous().view_as(self.localsums)]))
+        self.output = self.subtractor.updateOutput([input, self.adjustedsums.contiguous().view_as(input)])
 
         return self.output
 
@@ -101,8 +107,9 @@ class SpatialSubtractiveNormalization(Module):
         self.gradInput.resize_as_(input).zero_()
 
         # backprop through all modules
-        gradsub = self.subtractor.updateGradInput([input, self.adjustedsums], gradOutput)
-        graddiv = self.divider.updateGradInput([self.localsums, self.coef], gradsub[1])
+        gradsub = self.subtractor.updateGradInput([input, self.adjustedsums.contiguous().view_as(input)], gradOutput)
+        graddiv = (self.divider.updateGradInput(
+            [self.localsums, self.coef.contiguous().view_as(self.localsums)], gradsub[1]))
         size = self.meanestimator.updateGradInput(input, graddiv[0]).size()
         self.gradInput.add_(self.meanestimator.updateGradInput(input, graddiv[0]))
         self.gradInput.add_(gradsub[0])

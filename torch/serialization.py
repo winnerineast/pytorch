@@ -10,10 +10,12 @@ import tempfile
 import warnings
 from contextlib import closing, contextmanager
 from ._utils import _import_dotted_name
+from ._six import string_classes as _string_classes
 if sys.version_info[0] == 2:
     import cPickle as pickle
 else:
     import pickle
+    import pathlib
 
 DEFAULT_PROTOCOL = 2
 
@@ -21,19 +23,13 @@ LONG_SIZE = struct.Struct('=l').size
 INT_SIZE = struct.Struct('=i').size
 SHORT_SIZE = struct.Struct('=h').size
 
+MAGIC_NUMBER = 0x1950a86a20f9469cfc6c
+PROTOCOL_VERSION = 1001
+STORAGE_KEY_SEPARATOR = ','
+
 
 class SourceChangeWarning(Warning):
     pass
-
-
-def _add_to_tar(fn, tar_file, name):
-    tmp_file = tempfile.NamedTemporaryFile(delete=False)
-    fn(tmp_file)
-    tmp_file.close()
-
-    tar_file.add(tmp_file.name, arcname=name)
-    if os.path.isfile(tmp_file.name):
-        os.remove(tmp_file.name)
 
 
 @contextmanager
@@ -69,8 +65,8 @@ def _cpu_deserialize(obj, location):
 
 def _cuda_deserialize(obj, location):
     if location.startswith('cuda'):
-        device_id = max(int(location[5:]), 0)
-        return obj.cuda(device_id)
+        device = max(int(location[5:]), 0)
+        return obj.cuda(device)
 
 
 register_package(10, _cpu_tag, _cpu_deserialize)
@@ -83,7 +79,7 @@ def location_tag(storage):
         if location:
             return location
     raise RuntimeError("don't know how to determine data location of " +
-            torch.typename(storage))
+                       torch.typename(storage))
 
 
 def default_restore_location(storage, location):
@@ -92,7 +88,8 @@ def default_restore_location(storage, location):
         if result is not None:
             return result
     raise RuntimeError("don't know how to restore data location of " +
-            torch.typename(storage) + " (tagged with " + location + ")")
+                       torch.typename(storage) + " (tagged with " +
+                       location + ")")
 
 
 def normalize_storage_type(storage_type):
@@ -105,8 +102,28 @@ def storage_to_tensor_type(storage):
     return getattr(module, storage_type.__name__.replace('Storage', 'Tensor'))
 
 
+def _with_file_like(f, mode, body):
+    """
+    Executes a body function with a file object for f, opening
+    it in 'mode' if it is a string filename.
+    """
+    new_fd = False
+    if isinstance(f, str) or \
+            (sys.version_info[0] == 2 and isinstance(f, unicode)) or \
+            (sys.version_info[0] == 3 and isinstance(f, pathlib.Path)):
+        new_fd = True
+        f = open(f, mode)
+    try:
+        return body(f)
+    finally:
+        if new_fd:
+            f.close()
+
+
 def save(obj, f, pickle_module=pickle, pickle_protocol=DEFAULT_PROTOCOL):
     """Saves an object to a disk file.
+
+    See also: :ref:`recommend-saving-models`
 
     Args:
         obj: saved object
@@ -115,24 +132,20 @@ def save(obj, f, pickle_module=pickle, pickle_protocol=DEFAULT_PROTOCOL):
         pickle_module: module used for pickling metadata and objects
         pickle_protocol: can be specified to override the default protocol
     """
-    new_fd = False
-    if isinstance(f, str):
-        new_fd = True
-        f = open(f, "wb")
-    try:
-        return _save(obj, f, pickle_module, pickle_protocol)
-    finally:
-        if new_fd:
-            f.close()
+    return _with_file_like(f, "wb", lambda f: _save(obj, f, pickle_module, pickle_protocol))
 
 
 def _save(obj, f, pickle_module, pickle_protocol):
     import torch.nn as nn
-    serialized_tensors = {}
-    serialized_storages = {}
     serialized_container_types = {}
+    serialized_storages = {}
 
     def persistent_id(obj):
+        # FIXME: the docs say that persistent_id should only return a string
+        # but torch store returns tuples. This works only in the binary protocol
+        # see
+        # https://docs.python.org/2/library/pickle.html#pickling-and-unpickling-external-objects
+        # https://github.com/python/cpython/blob/master/Lib/pickle.py#L527-L537
         if isinstance(obj, type) and issubclass(obj, nn.Module):
             if obj in serialized_container_types:
                 return None
@@ -141,107 +154,113 @@ def _save(obj, f, pickle_module, pickle_protocol):
             try:
                 source_file = inspect.getsourcefile(obj)
                 source = inspect.getsource(obj)
-            except (TypeError, IOError):
+            except Exception:  # saving the source is optional, so we can ignore any errors
                 warnings.warn("Couldn't retrieve source code for container of "
-                        "type " + obj.__name__ + ". It won't be checked "
-                        "for correctness upon loading.")
-            return (obj, source_file, source)
-        if torch.is_tensor(obj):
-            serialized_tensors[obj._cdata] = obj
-            return str(obj._cdata)
+                              "type " + obj.__name__ + ". It won't be checked "
+                              "for correctness upon loading.")
+            return ('module', obj, source_file, source)
         elif torch.is_storage(obj):
-            serialized_storages[obj._cdata] = obj
-            return str(obj._cdata)
+            storage_type = normalize_storage_type(type(obj))
+            root, offset = obj._root_storage()
+            root_key = str(root._cdata)
+            location = location_tag(obj)
+            serialized_storages[root_key] = root
+            is_view = obj._cdata != root._cdata
+            if is_view:
+                view_metadata = (str(obj._cdata), offset, obj.size())
+            else:
+                view_metadata = None
+
+            return ('storage',
+                    storage_type,
+                    root_key,
+                    location,
+                    root.size(),
+                    view_metadata)
+
         return None
 
-    def save_tensors(f):
-        pickle_module.dump(len(serialized_tensors), f, protocol=pickle_protocol)
-        for key, tensor in serialized_tensors.items():
-            storage = tensor.storage()
-            if storage is not None:
-                storage_id = storage._cdata
-                serialized_storages[storage_id] = storage
-            else:
-                storage_id = None
+    sys_info = dict(
+        protocol_version=PROTOCOL_VERSION,
+        little_endian=sys.byteorder == 'little',
+        type_sizes=dict(
+            short=SHORT_SIZE,
+            int=INT_SIZE,
+            long=LONG_SIZE,
+        ),
+    )
 
-            pickle_module.dump((key, storage_id, type(tensor)), f,
-                    protocol=pickle_protocol)
-            f.flush()
-            tensor._write_metadata(f)
+    pickle_module.dump(MAGIC_NUMBER, f, protocol=pickle_protocol)
+    pickle_module.dump(PROTOCOL_VERSION, f, protocol=pickle_protocol)
+    pickle_module.dump(sys_info, f, protocol=pickle_protocol)
+    pickler = pickle_module.Pickler(f, protocol=pickle_protocol)
+    pickler.persistent_id = persistent_id
+    pickler.dump(obj)
 
-    def save_storages(f):
-        storage_views = []
-        storage_views_roots = {}
-
-        for key, storage in serialized_storages.items():
-            root, offset = storage._root_storage()
-            if root is not storage:
-                storage_views_roots[root._cdata] = root
-                storage_views.append((storage._cdata, root._cdata, offset,
-                    storage.size()))
-        for view_info in storage_views:
-            del serialized_storages[view_info[0]]
-        serialized_storages.update(storage_views_roots)
-
-        pickle_module.dump(len(serialized_storages), f, protocol=pickle_protocol)
-        for key, storage in serialized_storages.items():
-            location = location_tag(storage)
-            storage_type = normalize_storage_type(type(storage))
-            pickle_module.dump((key, location, storage_type), f,
-                    protocol=pickle_protocol)
-            f.flush()
-            storage._write_file(f)
-
-        pickle_module.dump(storage_views, f, protocol=pickle_protocol)
-
-    def pickle_objects(f):
-        pickler = pickle_module.Pickler(f, protocol=pickle_protocol)
-        pickler.persistent_id = persistent_id
-        pickler.dump(obj)
-
-    def save_sys_info(f):
-        sys_info = dict(
-            protocol_version=1000,
-            little_endian=sys.byteorder == 'little',
-            type_sizes = dict(
-                short=SHORT_SIZE,
-                int=INT_SIZE,
-                long=LONG_SIZE,
-            ),
-        )
-        pickle_module.dump(sys_info, f, protocol=pickle_protocol)
-
-    with closing(tarfile.open(fileobj=f, mode='w:', format=tarfile.PAX_FORMAT)) as tar:
-        _add_to_tar(save_sys_info, tar, 'sys_info')
-        _add_to_tar(pickle_objects, tar, 'pickle')
-        _add_to_tar(save_tensors, tar, 'tensors')
-        _add_to_tar(save_storages, tar, 'storages')
+    serialized_storage_keys = sorted(serialized_storages.keys())
+    pickle_module.dump(serialized_storage_keys, f, protocol=pickle_protocol)
+    f.flush()
+    for key in serialized_storage_keys:
+        serialized_storages[key]._write_file(f)
 
 
 def load(f, map_location=None, pickle_module=pickle):
-    """Loads an object saved with torch.save from a disk file.
+    """Loads an object saved with :func:`torch.save` from a file.
 
-    torch.load can dynamically remap storages to be loaded on a different device
-    using the map_location argument. If it's a callable, it will be called with
-    two arguments: storage and location tag. It's expected to either return a
-    storage that's been moved to a different location, or None (and the location
-    will be resolved using the default method). If this argument is a dict it's
-    expected to be a mapping from location tags used in a file, to location
-    tags of the current system.
+    torch.load uses Python's unpickling facilities but treats storages,
+    which underlie tensors, specially. They are first deserialized on the
+    CPU and are then moved to the device they were saved from. If this fails
+    (e.g. because the run time system doesn't have certain devices), an exception
+    is raised. However, storages can be dynamically remapped to an alternative
+    set of devices using the map_location argument.
 
-    By default the location tags are 'cpu' for host tensors and 'cuda:device_id'
-    (e.g. 'cuda:2') for cuda tensors. User extensions can register their own
-    tagging and deserialization methods using register_package.
+    If map_location is a callable, it will be called once for each serialized
+    storage with two arguments: storage and location. The storage argument
+    will be the initial deserialization of the storage, residing on the CPU.
+    Each serialized storage has a location tag associated with it which
+    identifies the device it was saved from, and this tag is the second
+    argument passed to map_location. The builtin location tags are 'cpu' for
+    CPU tensors and 'cuda:device_id' (e.g. 'cuda:2') for CUDA tensors.
+    map_location should return either None or a storage. If map_location returns
+    a storage, it will be used as the final deserialized object, already moved to
+    the right device. Otherwise, torch.load will fall back to the default behavior,
+    as if map_location wasn't specified.
+
+    If map_location is a string, it should be a device tag, where all tensors
+    should be loaded.
+
+    Otherwise, if map_location is a dict, it will be used to remap location tags
+    appearing in the file (keys), to ones that specify where to put the
+    storages (values).
+
+    User extensions can register their own location tags and tagging and
+    deserialization methods using register_package.
 
     Args:
-        f: a file-like object (has to implement fileno that returns a file descriptor)
-            or a string containing a file name
-        map_location: a function or a dict specifying how to remap storage locations
-        pickle_module: module used for unpickling metadata and objects (has to match
-            the pickle_module used to serialize file)
+        f: a file-like object (has to implement fileno that returns a file
+            descriptor, and must implement seek), or a string containing a file
+            name
+        map_location: a function, string or a dict specifying how to remap storage
+            locations
+        pickle_module: module used for unpickling metadata and objects (has to
+            match the pickle_module used to serialize file)
+
+    Example:
+        >>> torch.load('tensors.pt')
+        # Load all tensors onto the CPU
+        >>> torch.load('tensors.pt', map_location='cpu')
+        # Load all tensors onto the CPU, using a function
+        >>> torch.load('tensors.pt', map_location=lambda storage, loc: storage)
+        # Load all tensors onto GPU 1
+        >>> torch.load('tensors.pt', map_location=lambda storage, loc: storage.cuda(1))
+        # Map tensors from GPU 1 to GPU 0
+        >>> torch.load('tensors.pt', map_location={'cuda:1':'cuda:0'})
+
     """
     new_fd = False
-    if isinstance(f, str):
+    if isinstance(f, str) or \
+            (sys.version_info[0] == 2 and isinstance(f, unicode)) or \
+            (sys.version_info[0] == 3 and isinstance(f, pathlib.Path)):
         new_fd = True
         f = open(f, 'rb')
     try:
@@ -260,10 +279,13 @@ def _load(f, map_location, pickle_module):
         def restore_location(storage, location):
             location = map_location.get(location, location)
             return default_restore_location(storage, location)
+    elif isinstance(map_location, _string_classes):
+        def restore_location(storage, location):
+            return default_restore_location(storage, map_location)
     else:
         def restore_location(storage, location):
             result = map_location(storage, location)
-            if not result:
+            if result is None:
                 result = default_restore_location(storage, location)
             return result
 
@@ -272,11 +294,10 @@ def _load(f, map_location, pickle_module):
         if original_source != current_source:
             if container_type.dump_patches:
                 file_name = container_type.__name__ + '.patch'
-                diff = difflib.unified_diff(
-                        current_source.split('\n'),
-                        original_source.split('\n'),
-                        source_file,
-                        source_file, lineterm="")
+                diff = difflib.unified_diff(current_source.split('\n'),
+                                            original_source.split('\n'),
+                                            source_file,
+                                            source_file, lineterm="")
                 lines = '\n'.join(diff)
                 try:
                     with open(file_name, 'a+') as f:
@@ -303,45 +324,113 @@ def _load(f, map_location, pickle_module):
                    .format(torch.typename(container_type), msg))
             warnings.warn(msg, SourceChangeWarning)
 
+    def legacy_load(f):
+        deserialized_objects = {}
+
+        def persistent_load(saved_id):
+            if isinstance(saved_id, tuple):
+                # Ignore containers that don't have any sources saved
+                if all(saved_id[1:]):
+                    _check_container_source(*saved_id)
+                return saved_id[0]
+            return deserialized_objects[int(saved_id)]
+
+        with closing(tarfile.open(fileobj=f, mode='r:', format=tarfile.PAX_FORMAT)) as tar, \
+                mkdtemp() as tmpdir:
+
+            tar.extract('storages', path=tmpdir)
+            with open(os.path.join(tmpdir, 'storages'), 'rb', 0) as f:
+                num_storages = pickle_module.load(f)
+                for i in range(num_storages):
+                    args = pickle_module.load(f)
+                    key, location, storage_type = args
+                    obj = storage_type._new_with_file(f)
+                    obj = restore_location(obj, location)
+                    deserialized_objects[key] = obj
+
+                storage_views = pickle_module.load(f)
+                for target_cdata, root_cdata, offset, size in storage_views:
+                    root = deserialized_objects[root_cdata]
+                    deserialized_objects[target_cdata] = root[offset:offset + size]
+
+            tar.extract('tensors', path=tmpdir)
+            with open(os.path.join(tmpdir, 'tensors'), 'rb', 0) as f:
+                num_tensors = pickle_module.load(f)
+                for _ in range(num_tensors):
+                    args = pickle_module.load(f)
+                    key, storage_id, original_tensor_type = args
+                    storage = deserialized_objects[storage_id]
+                    tensor_type = storage_to_tensor_type(storage)
+                    ndim, = struct.unpack('<i', f.read(4))
+                    # skip next 4 bytes; legacy encoding treated ndim as 8 bytes
+                    f.read(4)
+                    size = struct.unpack('<{}q'.format(ndim), f.read(8 * ndim))
+                    stride = struct.unpack('<{}q'.format(ndim), f.read(8 * ndim))
+                    storage_offset, = struct.unpack('<q', f.read(8))
+                    tensor = tensor_type().set_(storage, storage_offset, size, stride)
+                    deserialized_objects[key] = tensor
+
+            pickle_file = tar.extractfile('pickle')
+            unpickler = pickle_module.Unpickler(pickle_file)
+            unpickler.persistent_load = persistent_load
+            result = unpickler.load()
+            return result
+
+    deserialized_objects = {}
+
     def persistent_load(saved_id):
-        if isinstance(saved_id, tuple):
+        assert isinstance(saved_id, tuple)
+        typename = saved_id[0]
+        data = saved_id[1:]
+
+        if typename == 'module':
             # Ignore containers that don't have any sources saved
-            if all(saved_id[1:]):
-                _check_container_source(*saved_id)
-            return saved_id[0]
-        return deserialized_objects[int(saved_id)]
+            if all(data[1:]):
+                _check_container_source(*data)
+            return data[0]
+        elif typename == 'storage':
+            data_type, root_key, location, size, view_metadata = data
+            if root_key not in deserialized_objects:
+                deserialized_objects[root_key] = restore_location(
+                    data_type(size), location)
+            storage = deserialized_objects[root_key]
+            if view_metadata is not None:
+                view_key, offset, view_size = view_metadata
+                if view_key not in deserialized_objects:
+                    deserialized_objects[view_key] = storage[offset:offset + view_size]
+                return deserialized_objects[view_key]
+            else:
+                return storage
+        else:
+            raise RuntimeError("Unknown saved id type: %s" % saved_id[0])
 
-    with closing(tarfile.open(fileobj=f, mode='r:', format=tarfile.PAX_FORMAT)) as tar, \
-         mkdtemp() as tmpdir:
+    foffset = f.tell()
+    if foffset == 0:
+        # only if offset is zero we can attempt the legacy tar file loader
+        try:
+            return legacy_load(f)
+        except tarfile.TarError:
+            # if not a tarfile, reset file offset and proceed
+            f.seek(foffset)
 
-        tar.extract('storages', path=tmpdir)
-        with open(os.path.join(tmpdir, 'storages'), 'rb', 0) as f:
-            num_storages = pickle_module.load(f)
-            for i in range(num_storages):
-                args = pickle_module.load(f)
-                key, location, storage_type = args
-                obj = storage_type._new_with_file(f)
-                obj = restore_location(obj, location)
-                deserialized_objects[key] = obj
+    magic_number = pickle_module.load(f)
+    if magic_number != MAGIC_NUMBER:
+        raise RuntimeError("Invalid magic number; corrupt file?")
+    protocol_version = pickle_module.load(f)
+    if protocol_version != PROTOCOL_VERSION:
+        raise RuntimeError("Invalid protocol version: %s" % protocol_version)
 
-            storage_views = pickle_module.load(f)
-            for target_cdata, root_cdata, offset, size in storage_views:
-                root = deserialized_objects[root_cdata]
-                deserialized_objects[target_cdata] = root[offset:offset+size]
+    _sys_info = pickle_module.load(f)
+    unpickler = pickle_module.Unpickler(f)
+    unpickler.persistent_load = persistent_load
+    result = unpickler.load()
 
-        tar.extract('tensors', path=tmpdir)
-        with open(os.path.join(tmpdir, 'tensors'), 'rb', 0) as f:
-            num_tensors = pickle_module.load(f)
-            for i in range(num_tensors):
-                args = pickle_module.load(f)
-                key, storage_id, original_tensor_type = args
-                storage = deserialized_objects[storage_id]
-                tensor_type = storage_to_tensor_type(storage)
-                tensor = tensor_type._new_with_metadata_file(f, storage)
-                deserialized_objects[key] = tensor
+    deserialized_storage_keys = pickle_module.load(f)
 
-        pickle_file = tar.extractfile('pickle')
-        unpickler = pickle_module.Unpickler(pickle_file)
-        unpickler.persistent_load = persistent_load
-        result = unpickler.load()
-        return result
+    offset = f.tell()
+    for key in deserialized_storage_keys:
+        assert key in deserialized_objects
+        deserialized_objects[key]._set_from_file(f, offset)
+        offset = None
+
+    return result

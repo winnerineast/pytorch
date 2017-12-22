@@ -5,16 +5,19 @@ Additionally, it provides many utilities for efficient serializing of
 Tensors and arbitrary types, and other useful utilities.
 
 It has a CUDA counterpart, that enables you to run your tensor computations
-on an NVIDIA GPU with compute capability >= 2.0.
+on an NVIDIA GPU with compute capability >= 3.0.
 """
 
 import sys
+import platform
 from ._utils import _import_dotted_name
+from .version import __version__
 
 __all__ = [
     'typename', 'is_tensor', 'is_storage', 'set_default_tensor_type',
     'set_rng_state', 'get_rng_state', 'manual_seed', 'initial_seed',
-    'save', 'load', 'set_printoptions', 'chunk', 'split', 'stack',
+    'save', 'load', 'set_printoptions', 'chunk', 'split', 'stack', 'matmul',
+    'no_grad', 'enable_grad',
     'DoubleStorage', 'FloatStorage', 'LongStorage', 'IntStorage',
     'ShortStorage', 'CharStorage', 'ByteStorage',
     'DoubleTensor', 'FloatTensor', 'LongTensor', 'IntTensor',
@@ -30,17 +33,46 @@ __all__ = [
 # automatically filled by the dynamic loader.
 import os as _dl_flags
 
-# first check if the os package has the required flags
-if not hasattr(_dl_flags, 'RTLD_GLOBAL') or not hasattr(_dl_flags, 'RTLD_NOW'):
-    try:
-        # next try if DLFCN exists
-        import DLFCN as _dl_flags
-    except ImportError:
-        # as a last attempt, use compile-time constants
-        import torch._dl as _dl_flags
+# if we have numpy, it *must* be imported before the call to setdlopenflags()
+# or there is risk that later c modules will segfault when importing numpy
+try:
+    import numpy as _np
+except ImportError:
+    pass
 
-old_flags = sys.getdlopenflags()
-sys.setdlopenflags(_dl_flags.RTLD_GLOBAL | _dl_flags.RTLD_NOW)
+if platform.system() == 'Windows':
+    # first get nvToolsExt PATH
+    def get_nvToolsExt_path():
+        NVTOOLEXT_HOME = _dl_flags.getenv('NVTOOLSEXT_PATH', 'C:\\Program Files\\NVIDIA Corporation\\NvToolsExt')
+
+        if _dl_flags.path.exists(NVTOOLEXT_HOME):
+            return NVTOOLEXT_HOME + '\\bin\\x64\\'
+        else:
+            return ''
+
+    # then add the path to env
+    _dl_flags.environ['PATH'] = _dl_flags.path.dirname(
+        __file__) + '\\lib\\;' + get_nvToolsExt_path() + ';' + _dl_flags.environ['PATH']
+
+else:
+    # first check if the os package has the required flags
+    if not hasattr(_dl_flags, 'RTLD_GLOBAL') or not hasattr(_dl_flags, 'RTLD_LAZY'):
+        try:
+            # next try if DLFCN exists
+            import DLFCN as _dl_flags
+        except ImportError:
+            # as a last attempt, use compile-time constants
+            import torch._dl as _dl_flags
+
+    old_flags = sys.getdlopenflags()
+    sys.setdlopenflags(_dl_flags.RTLD_GLOBAL | _dl_flags.RTLD_LAZY)
+
+del _dl_flags
+
+try:
+    import torch._nvrtc
+except ImportError:
+    pass
 
 from torch._C import *
 
@@ -48,13 +80,14 @@ __all__ += [name for name in dir(_C)
             if name[0] != '_' and
             not name.endswith('Base')]
 
-sys.setdlopenflags(old_flags)
-del _dl_flags
-del old_flags
+if platform.system() != 'Windows':
+    sys.setdlopenflags(old_flags)
+    del old_flags
 
 ################################################################################
 # Define basic utilities
 ################################################################################
+
 
 def typename(o):
     module = ''
@@ -74,11 +107,21 @@ def typename(o):
 
 
 def is_tensor(obj):
-    return obj.__class__ in _tensor_classes
+    r"""Returns True if `obj` is a pytorch tensor.
+
+    Args:
+        obj (Object): Object to test
+    """
+    return type(obj) in _tensor_classes
 
 
 def is_storage(obj):
-    return obj.__class__ in _storage_classes
+    r"""Returns True if `obj` is a pytorch storage object.
+
+    Args:
+        obj (Object): Object to test
+    """
+    return type(obj) in _storage_classes
 
 
 def set_default_tensor_type(t):
@@ -89,37 +132,7 @@ def set_default_tensor_type(t):
     _C._set_default_tensor_type(Tensor)
 
 
-def set_rng_state(new_state):
-    r"""Sets the random number generator state.
-    
-    Args:
-        new_state (torch.ByteTensor): The desired state
-    """
-    default_generator.set_state(new_state)
-
-
-def get_rng_state():
-    r"""Returns the random number generator state as a ByteTensor."""
-    return default_generator.get_state()
-
-
-def manual_seed(seed):
-    r"""Sets the seed for generating random numbers. And returns a 
-    `torch._C.Generator` object.
-    
-    Args:
-        seed (int or long): The desired seed.
-    """
-    return default_generator.manual_seed(seed)
-
-
-def initial_seed():
-    r"""Returns the initial seed for generating random numbers as a 
-    python `long`.
-    """
-    return default_generator.initial_seed()
-
-
+from .random import set_rng_state, get_rng_state, manual_seed, initial_seed
 from .serialization import save, load
 from ._tensor_str import set_printoptions
 
@@ -130,61 +143,115 @@ from ._tensor_str import set_printoptions
 from .storage import _StorageBase
 from .tensor import _TensorBase
 
+
 class DoubleStorage(_C.DoubleStorageBase, _StorageBase):
     pass
+
+
 class FloatStorage(_C.FloatStorageBase, _StorageBase):
     pass
+
+
+class HalfStorage(_C.HalfStorageBase, _StorageBase):
+    pass
+
+
 class LongStorage(_C.LongStorageBase, _StorageBase):
     pass
+
+
 class IntStorage(_C.IntStorageBase, _StorageBase):
     pass
+
+
 class ShortStorage(_C.ShortStorageBase, _StorageBase):
     pass
+
+
 class CharStorage(_C.CharStorageBase, _StorageBase):
     pass
+
+
 class ByteStorage(_C.ByteStorageBase, _StorageBase):
     pass
 
+
 class DoubleTensor(_C.DoubleTensorBase, _TensorBase):
+
     def is_signed(self):
         return True
+
     @classmethod
     def storage_type(cls):
         return DoubleStorage
+
+
 class FloatTensor(_C.FloatTensorBase, _TensorBase):
+
     def is_signed(self):
         return True
+
     @classmethod
     def storage_type(cls):
         return FloatStorage
-class LongTensor(_C.LongTensorBase, _TensorBase):
+
+
+class HalfTensor(_C.HalfTensorBase, _TensorBase):
+
     def is_signed(self):
         return True
+
+    @classmethod
+    def storage_type(cls):
+        return HalfStorage
+
+
+class LongTensor(_C.LongTensorBase, _TensorBase):
+
+    def is_signed(self):
+        return True
+
     @classmethod
     def storage_type(cls):
         return LongStorage
+
+
 class IntTensor(_C.IntTensorBase, _TensorBase):
+
     def is_signed(self):
         return True
+
     @classmethod
     def storage_type(cls):
         return IntStorage
+
+
 class ShortTensor(_C.ShortTensorBase, _TensorBase):
+
     def is_signed(self):
         return True
+
     @classmethod
     def storage_type(cls):
         return ShortStorage
+
+
 class CharTensor(_C.CharTensorBase, _TensorBase):
+
     def is_signed(self):
         # TODO
         return False
+
     @classmethod
     def storage_type(cls):
         return CharStorage
+
+
 class ByteTensor(_C.ByteTensorBase, _TensorBase):
+
     def is_signed(self):
         return False
+
     @classmethod
     def storage_type(cls):
         return ByteStorage
@@ -192,14 +259,17 @@ class ByteTensor(_C.ByteTensorBase, _TensorBase):
 
 _storage_classes = {
     DoubleStorage, FloatStorage, LongStorage, IntStorage, ShortStorage,
-    CharStorage, ByteStorage,
+    CharStorage, ByteStorage, HalfStorage
 }
 
 _tensor_classes = {
     DoubleTensor, FloatTensor, LongTensor, IntTensor, ShortTensor,
-    CharTensor, ByteTensor,
+    CharTensor, ByteTensor, HalfTensor
 }
 
+_integer_tensor_classes = {
+    LongTensor, IntTensor, ShortTensor, CharTensor, ByteTensor
+}
 
 set_default_tensor_type('torch.FloatTensor')
 
@@ -209,19 +279,23 @@ set_default_tensor_type('torch.FloatTensor')
 
 from .functional import *
 
+
 ################################################################################
 # Initialize extension
 ################################################################################
 
+def manager_path():
+    if platform.system() == 'Windows':
+        return b""
+    import os
+    path = os.path.join(os.path.abspath(os.path.dirname(__file__)), 'lib', 'torch_shm_manager')
+    if not os.path.exists(path):
+        raise RuntimeError("Unable to find torch_shm_manager at " + path)
+    return path.encode('utf-8')
+
+
 # Shared memory manager needs to know the exact location of manager executable
-import os
-manager_path = os.path.join(os.path.abspath(os.path.dirname(__file__)), 'lib', 'torch_shm_manager')
-if sys.version_info[0] >= 3:
-    manager_path = bytes(manager_path, 'ascii')
-
-_C._initExtension(manager_path)
-
-del os
+_C._initExtension(manager_path())
 del manager_path
 
 ################################################################################
@@ -260,7 +334,15 @@ import torch.autograd
 import torch.nn
 import torch.optim
 import torch.multiprocessing
+import torch.sparse
+import torch.utils.backcompat
+import torch.onnx
+import torch.random
+import torch.distributions
+from torch.autograd import no_grad, enable_grad
+
+_C._init_names(list(torch._tensor_classes) + list(torch._storage_classes))
 
 # attach docstrings to torch and tensor functions
-from . import _torch_docs, _tensor_docs
-del _torch_docs, _tensor_docs
+from . import _torch_docs, _tensor_docs, _storage_docs
+del _torch_docs, _tensor_docs, _storage_docs

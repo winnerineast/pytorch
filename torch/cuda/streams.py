@@ -1,21 +1,6 @@
 import ctypes
 import torch
-from . import cudart
-
-
-SUCCESS = 0
-ERROR_NOT_READY = 34
-
-
-class CudaError(RuntimeError):
-    def __init__(self, code):
-        msg = cudart().cudaGetErrorString(code).decode('utf-8')
-        super(CudaError, self).__init__('{0} ({1})'.format(msg, code))
-
-
-def check_error(res):
-    if res != SUCCESS:
-        raise CudaError(res)
+from . import cudart, check_error, cudaStatus
 
 
 class Stream(torch._C._CudaStreamBase):
@@ -23,11 +8,13 @@ class Stream(torch._C._CudaStreamBase):
 
     Arguments:
         device(int, optional): a device on which to allocate the Stream.
+        priority(int, optional): priority of the stream. Lower numbers
+                                 represent higher priorities.
     """
 
-    def __new__(cls, device=-1, **kwargs):
+    def __new__(cls, device=-1, priority=0, **kwargs):
         with torch.cuda.device(device):
-            return super(Stream, cls).__new__(cls, **kwargs)
+            return super(Stream, cls).__new__(cls, priority=priority, **kwargs)
 
     def wait_event(self, event):
         """Makes all future work submitted to the stream wait for an event.
@@ -70,7 +57,7 @@ class Stream(torch._C._CudaStreamBase):
             A boolean indicating if all kernels in this stream are completed.
         """
         res = cudart().cudaStreamQuery(self)
-        if res == ERROR_NOT_READY:
+        if res == cudaStatus.ERROR_NOT_READY:
             return False
         check_error(res)
         return True
@@ -78,6 +65,20 @@ class Stream(torch._C._CudaStreamBase):
     def synchronize(self):
         """Wait for all the kernels in this stream to complete."""
         check_error(cudart().cudaStreamSynchronize(self))
+
+    @staticmethod
+    def priority_range():
+        least_priority = ctypes.c_int()
+        greatest_priority = ctypes.c_int()
+        check_error(cudart().cudaDeviceGetStreamPriorityRange(
+            ctypes.byref(least_priority), ctypes.byref(greatest_priority)))
+        return (least_priority.value, greatest_priority.value)
+
+    @property
+    def priority(self):
+        priority = ctypes.c_int()
+        check_error(cudart().cudaStreamGetPriority(self, ctypes.byref(priority)))
+        return priority.value
 
     @property
     def _as_parameter_(self):
@@ -106,10 +107,10 @@ class Event(object):
 
     Arguments:
         enable_timing (bool): indicates if the event should measure time
-            (default: False)
-        blocking (bool): if true, :meth:`wait` will be blocking (default: False)
-        interprocess (bool): if true, the event can be shared between processes
-            (default: False)
+            (default: ``False``)
+        blocking (bool): if ``True``, :meth:`wait` will be blocking (default: ``False``)
+        interprocess (bool): if ``True``, the event can be shared between processes
+            (default: ``False``)
     """
 
     DEFAULT = 0x0
@@ -159,7 +160,7 @@ class Event(object):
             A boolean indicating if the event has been recorded.
         """
         res = cudart().cudaEventQuery(self)
-        if res == ERROR_NOT_READY:
+        if res == cudaStatus.ERROR_NOT_READY:
             return False
         check_error(res)
         return True

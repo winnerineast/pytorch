@@ -2,6 +2,7 @@
 import torch
 from .Module import Module
 
+
 class ELU(Module):
     """
             Djork-Arné Clevert, Thomas Unterthiner, Sepp Hochreiter
@@ -21,6 +22,7 @@ class ELU(Module):
             input,
             self.output,
             self.alpha,
+            1.0,
             self.inplace
         )
         return self.output
@@ -28,15 +30,13 @@ class ELU(Module):
     def updateGradInput(self, input, gradOutput):
         self._backend.ELU_updateGradInput(
             self._backend.library_state,
-            input,
             gradOutput,
             self.gradInput,
             self.output,
             self.alpha,
-            self.inplace
+            1.0
         )
         return self.gradInput
 
     def __repr__(self):
         return '{}(alpha={:.3f})'.format(str(type(self)), self.alpha)
-

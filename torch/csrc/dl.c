@@ -1,5 +1,5 @@
-#include <dlfcn.h>
 #include <Python.h>
+#include <dlfcn.h>
 
 PyObject* module;
 
@@ -18,9 +18,9 @@ static struct PyModuleDef torchdlmodule = {
 #endif
 
 #if PY_MAJOR_VERSION == 2
-PyMODINIT_FUNC init_dl()
+PyMODINIT_FUNC init_dl(void)
 #else
-PyMODINIT_FUNC PyInit__dl()
+PyMODINIT_FUNC PyInit__dl(void)
 #endif
 {
 
@@ -35,8 +35,9 @@ PyMODINIT_FUNC PyInit__dl()
 #else
   ASSERT_TRUE(module = PyModule_Create(&torchdlmodule));
 #endif
-  ASSERT_TRUE(PyModule_AddIntConstant(module, "RTLD_GLOBAL", (long) RTLD_GLOBAL) == 0);
-  ASSERT_TRUE(PyModule_AddIntConstant(module, "RTLD_NOW", (long) RTLD_NOW) == 0);
+  ASSERT_TRUE(PyModule_AddIntConstant(module, "RTLD_GLOBAL", (int64_t) RTLD_GLOBAL) == 0);
+  ASSERT_TRUE(PyModule_AddIntConstant(module, "RTLD_NOW", (int64_t) RTLD_NOW) == 0);
+  ASSERT_TRUE(PyModule_AddIntConstant(module, "RTLD_LAZY", (int64_t) RTLD_LAZY) == 0);
 
 #if PY_MAJOR_VERSION == 2
 #else

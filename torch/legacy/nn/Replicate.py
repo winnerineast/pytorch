@@ -1,6 +1,7 @@
 import torch
 from .Module import Module
 
+
 class Replicate(Module):
 
     def __init__(self, nf, dim=0):
@@ -28,5 +29,5 @@ class Replicate(Module):
         size.insert(self.dim, 1)
 
         gradInput = self.gradInput.view(*size)
-        torch.sum(gradOutput, self.dim, out=gradInput)
+        torch.sum(gradOutput, self.dim, True, out=gradInput)
         return self.gradInput

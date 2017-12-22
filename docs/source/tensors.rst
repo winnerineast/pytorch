@@ -1,5 +1,7 @@
 .. currentmodule:: torch
 
+.. _tensor-doc:
+
 torch.Tensor
 ===================================
 
@@ -13,9 +15,9 @@ Data type                CPU tensor                    GPU tensor
 ======================== ===========================   ================================
 32-bit floating point    :class:`torch.FloatTensor`    :class:`torch.cuda.FloatTensor`
 64-bit floating point    :class:`torch.DoubleTensor`   :class:`torch.cuda.DoubleTensor`
-16-bit floating point    N/A                           :class:`torch.cuda.HalfTensor`
-8-bit integer (signed)   :class:`torch.ByteTensor`     :class:`torch.cuda.ByteTensor`
-8-bit integer (unsigned) :class:`torch.CharTensor`     :class:`torch.cuda.CharTensor`
+16-bit floating point    :class:`torch.HalfTensor`     :class:`torch.cuda.HalfTensor`
+8-bit integer (unsigned) :class:`torch.ByteTensor`     :class:`torch.cuda.ByteTensor`
+8-bit integer (signed)   :class:`torch.CharTensor`     :class:`torch.cuda.CharTensor`
 16-bit integer (signed)  :class:`torch.ShortTensor`    :class:`torch.cuda.ShortTensor`
 32-bit integer (signed)  :class:`torch.IntTensor`      :class:`torch.cuda.IntTensor`
 64-bit integer (signed)  :class:`torch.LongTensor`     :class:`torch.cuda.LongTensor`
@@ -144,6 +146,10 @@ view of a storage and defines numeric operations on it.
    .. automethod:: eq
    .. automethod:: eq_
    .. automethod:: equal
+   .. automethod:: erf
+   .. automethod:: erf_
+   .. automethod:: erfinv
+   .. automethod:: erfinv_
    .. automethod:: exp
    .. automethod:: exp_
    .. automethod:: expand
@@ -196,9 +202,10 @@ view of a storage and defines numeric operations on it.
    .. automethod:: lt
    .. automethod:: lt_
    .. automethod:: map_
-   .. automethod:: masked_copy_
+   .. automethod:: masked_scatter_
    .. automethod:: masked_fill_
    .. automethod:: masked_select
+   .. automethod:: matmul
    .. automethod:: max
    .. automethod:: mean
    .. automethod:: median
@@ -233,6 +240,7 @@ view of a storage and defines numeric operations on it.
    .. automethod:: pow_
    .. automethod:: prod
    .. automethod:: pstrf
+   .. automethod:: put_
    .. automethod:: qr
    .. automethod:: random_
    .. automethod:: reciprocal
@@ -251,7 +259,6 @@ view of a storage and defines numeric operations on it.
    .. automethod:: scatter_
    .. automethod:: select
    .. automethod:: set_
-   .. automethod:: set_index
    .. automethod:: share_memory_
    .. automethod:: short
    .. automethod:: sigmoid
@@ -281,6 +288,7 @@ view of a storage and defines numeric operations on it.
    .. automethod:: symeig
    .. automethod:: t
    .. automethod:: t_
+   .. automethod:: take
    .. automethod:: tan
    .. automethod:: tan_
    .. automethod:: tanh
@@ -307,3 +315,10 @@ view of a storage and defines numeric operations on it.
    .. automethod:: view
    .. automethod:: view_as
    .. automethod:: zero_
+
+.. class:: ByteTensor()
+
+   The following methods are unique to :class:`torch.ByteTensor`.
+
+   .. automethod:: all
+   .. automethod:: any

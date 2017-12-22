@@ -7,6 +7,12 @@ torch.nn
 .. automodule:: torch.nn
 .. currentmodule:: torch.nn
 
+Parameters
+----------
+
+.. autoclass:: Parameter
+    :members:
+
 Containers
 ----------------------------------
 
@@ -14,6 +20,24 @@ Containers
 ~~~~~~~~~~~~~~~~
 
 .. autoclass:: Module
+    :members:
+
+:hidden:`Sequential`
+~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: Sequential
+    :members:
+
+:hidden:`ModuleList`
+~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: ModuleList
+    :members:
+
+:hidden:`ParameterList`
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: ParameterList
     :members:
 
 Convolution Layers
@@ -126,6 +150,77 @@ Pooling Layers
 .. autoclass:: LPPool2d
     :members:
 
+:hidden:`AdaptiveMaxPool1d`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: AdaptiveMaxPool1d
+    :members:
+
+:hidden:`AdaptiveMaxPool2d`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: AdaptiveMaxPool2d
+    :members:
+
+:hidden:`AdaptiveMaxPool3d`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: AdaptiveMaxPool3d
+    :members:
+
+:hidden:`AdaptiveAvgPool1d`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: AdaptiveAvgPool1d
+    :members:
+
+:hidden:`AdaptiveAvgPool2d`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: AdaptiveAvgPool2d
+    :members:
+
+:hidden:`AdaptiveAvgPool3d`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: AdaptiveAvgPool3d
+    :members:
+
+
+Padding Layers
+--------------
+
+:hidden:`ReflectionPad2d`
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: ReflectionPad2d
+    :members:
+
+:hidden:`ReplicationPad2d`
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: ReplicationPad2d
+    :members:
+
+:hidden:`ReplicationPad3d`
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: ReplicationPad3d
+    :members:
+
+:hidden:`ZeroPad2d`
+~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: ZeroPad2d
+    :members:
+
+:hidden:`ConstantPad2d`
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: ConstantPad2d
+    :members:
+
+
 Non-linear Activations
 ----------------------------------
 
@@ -145,6 +240,12 @@ Non-linear Activations
 ~~~~~~~~~~~~~
 
 .. autoclass:: ELU
+    :members:
+
+:hidden:`SELU`
+~~~~~~~~~~~~~~
+
+.. autoclass:: SELU
     :members:
 
 :hidden:`PReLU`
@@ -225,6 +326,12 @@ Non-linear Activations
 .. autoclass:: Softmax
     :members:
 
+:hidden:`Softmax2d`
+~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: Softmax2d
+    :members:
+
 :hidden:`LogSoftmax`
 ~~~~~~~~~~~~~~~~~~~~
 
@@ -253,6 +360,23 @@ Normalization layers
 .. autoclass:: BatchNorm3d
     :members:
 
+:hidden:`InstanceNorm1d`
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: InstanceNorm1d
+    :members:
+
+:hidden:`InstanceNorm2d`
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: InstanceNorm2d
+    :members:
+
+:hidden:`InstanceNorm3d`
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: InstanceNorm3d
+    :members:
 
 Recurrent layers
 ----------------------------------
@@ -302,6 +426,11 @@ Linear layers
 .. autoclass:: Linear
     :members:
 
+:hidden:`Bilinear`
+~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: Bilinear
+    :members:
 
 Dropout layers
 ----------------------------------
@@ -324,6 +453,12 @@ Dropout layers
 .. autoclass:: Dropout3d
     :members:
 
+:hidden:`AlphaDropout`
+~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: AlphaDropout
+    :members:
+
 
 Sparse layers
 ----------------------------------
@@ -332,6 +467,27 @@ Sparse layers
 ~~~~~~~~~~~~~~~~~~~
 
 .. autoclass:: Embedding
+    :members:
+
+:hidden:`EmbeddingBag`
+~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: EmbeddingBag
+    :members:
+
+Distance functions
+----------------------------------
+
+:hidden:`CosineSimilarity`
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: CosineSimilarity
+    :members:
+
+:hidden:`PairwiseDistance`
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: PairwiseDistance
     :members:
 
 
@@ -362,6 +518,18 @@ Loss functions
 .. autoclass:: NLLLoss
     :members:
 
+:hidden:`PoissonNLLLoss`
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: PoissonNLLLoss
+    :members:
+
+:hidden:`NLLLoss2d`
+~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: NLLLoss2d
+    :members:
+
 :hidden:`KLDivLoss`
 ~~~~~~~~~~~~~~~~~~~
 
@@ -372,6 +540,12 @@ Loss functions
 ~~~~~~~~~~~~~~~~~~~
 
 .. autoclass:: BCELoss
+    :members:
+
+:hidden:`BCEWithLogitsLoss`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: BCEWithLogitsLoss
     :members:
 
 :hidden:`MarginRankingLoss`
@@ -422,6 +596,12 @@ Loss functions
 .. autoclass:: MultiMarginLoss
     :members:
 
+:hidden:`TripletMarginLoss`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: TripletMarginLoss
+    :members:
+
 
 Vision layers
 ----------------
@@ -432,14 +612,79 @@ Vision layers
 .. autoclass:: PixelShuffle
     :members:
 
-Multi-GPU layers
-----------------
+:hidden:`Upsample`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: Upsample
+    :members:
+
+:hidden:`UpsamplingNearest2d`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: UpsamplingNearest2d
+    :members:
+
+:hidden:`UpsamplingBilinear2d`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: UpsamplingBilinear2d
+    :members:
+
+
+DataParallel layers (multi-GPU, distributed)
+--------------------------------------------
 
 :hidden:`DataParallel`
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
 
 .. autoclass:: DataParallel
     :members:
+
+:hidden:`DistributedDataParallel`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autoclass:: torch.nn.parallel.DistributedDataParallel
+    :members:
+
+
+Utilities
+---------
+
+:hidden:`clip_grad_norm`
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: torch.nn.utils.clip_grad_norm
+
+:hidden:`weight_norm`
+~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: torch.nn.utils.weight_norm
+
+:hidden:`remove_weight_norm`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: torch.nn.utils.remove_weight_norm
+
+
+.. currentmodule:: torch.nn.utils.rnn
+
+:hidden:`PackedSequence`
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: torch.nn.utils.rnn.PackedSequence
+
+
+:hidden:`pack_padded_sequence`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: torch.nn.utils.rnn.pack_padded_sequence
+
+
+:hidden:`pad_packed_sequence`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: torch.nn.utils.rnn.pad_packed_sequence
+
 
 torch.nn.functional
 ===================
@@ -532,6 +777,37 @@ Pooling functions
 
 .. autofunction:: lp_pool2d
 
+:hidden:`adaptive_max_pool1d`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: adaptive_max_pool1d
+
+:hidden:`adaptive_max_pool2d`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: adaptive_max_pool2d
+
+:hidden:`adaptive_max_pool3d`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: adaptive_max_pool3d
+
+:hidden:`adaptive_avg_pool1d`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: adaptive_avg_pool1d
+
+:hidden:`adaptive_avg_pool2d`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: adaptive_avg_pool2d
+
+:hidden:`adaptive_avg_pool3d`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: adaptive_avg_pool3d
+
+
 Non-linear activation functions
 -------------------------------
 
@@ -539,17 +815,20 @@ Non-linear activation functions
 ~~~~~~~~~~~~~~~~~~~
 
 .. autofunction:: threshold
+.. autofunction:: threshold_
 
 
 :hidden:`relu`
 ~~~~~~~~~~~~~~
 
 .. autofunction:: relu
+.. autofunction:: relu_
 
 :hidden:`hardtanh`
 ~~~~~~~~~~~~~~~~~~
 
 .. autofunction:: hardtanh
+.. autofunction:: hardtanh_
 
 :hidden:`relu6`
 ~~~~~~~~~~~~~~~
@@ -560,11 +839,18 @@ Non-linear activation functions
 ~~~~~~~~~~~~~
 
 .. autofunction:: elu
+.. autofunction:: elu_
+
+:hidden:`selu`
+~~~~~~~~~~~~~~
+
+.. autofunction:: selu
 
 :hidden:`leaky_relu`
 ~~~~~~~~~~~~~~~~~~~~
 
 .. autofunction:: leaky_relu
+.. autofunction:: leaky_relu_
 
 :hidden:`prelu`
 ~~~~~~~~~~~~~~~
@@ -575,6 +861,12 @@ Non-linear activation functions
 ~~~~~~~~~~~~~~~
 
 .. autofunction:: rrelu
+.. autofunction:: rrelu_
+
+:hidden:`glu`
+~~~~~~~~~~~~~~~
+
+.. autofunction:: glu
 
 :hidden:`logsigmoid`
 ~~~~~~~~~~~~~~~~~~~~
@@ -639,6 +931,11 @@ Normalization functions
 
 .. autofunction:: batch_norm
 
+:hidden:`normalize`
+~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: normalize
+
 Linear functions
 ----------------
 
@@ -655,34 +952,122 @@ Dropout functions
 
 .. autofunction:: dropout
 
-Loss functions
---------------
-
-:hidden:`nll_loss`
-~~~~~~~~~~~~~~~~~~
-
-.. autofunction:: nll_loss
-
-
-:hidden:`kl_div`
-~~~~~~~~~~~~~~~~
-
-.. autofunction:: kl_div
-
-:hidden:`cross_entropy`
+:hidden:`alpha_dropout`
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-.. autofunction:: cross_entropy
+.. autofunction:: alpha_dropout
+
+:hidden:`dropout2d`
+~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: dropout2d
+
+:hidden:`dropout3d`
+~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: dropout3d
+
+Distance functions
+----------------------------------
+
+:hidden:`pairwise_distance`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: pairwise_distance
+
+:hidden:`cosine_similarity`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: cosine_similarity
+
+
+Loss functions
+--------------
 
 :hidden:`binary_cross_entropy`
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. autofunction:: binary_cross_entropy
 
+:hidden:`poisson_nll_loss`
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: poisson_nll_loss
+
+:hidden:`cosine_embedding_loss`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: cosine_embedding_loss
+
+:hidden:`cross_entropy`
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: cross_entropy
+
+:hidden:`hinge_embedding_loss`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: hinge_embedding_loss
+
+:hidden:`kl_div`
+~~~~~~~~~~~~~~~~
+
+.. autofunction:: kl_div
+
+:hidden:`l1_loss`
+~~~~~~~~~~~~~~~~~
+
+.. autofunction:: l1_loss
+
+:hidden:`mse_loss`
+~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: mse_loss
+
+:hidden:`margin_ranking_loss`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: margin_ranking_loss
+
+:hidden:`multilabel_margin_loss`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: multilabel_margin_loss
+
+:hidden:`multilabel_soft_margin_loss`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: multilabel_soft_margin_loss
+
+:hidden:`multi_margin_loss`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: multi_margin_loss
+
+:hidden:`nll_loss`
+~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: nll_loss
+
+:hidden:`binary_cross_entropy_with_logits`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: binary_cross_entropy_with_logits
+
 :hidden:`smooth_l1_loss`
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. autofunction:: smooth_l1_loss
+
+:hidden:`soft_margin_loss`
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: soft_margin_loss
+
+:hidden:`triplet_margin_loss`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: triplet_margin_loss
 
 Vision functions
 ----------------
@@ -691,3 +1076,51 @@ Vision functions
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 .. autofunction:: pixel_shuffle
+
+:hidden:`pad`
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: pad
+
+:hidden:`upsample`
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: upsample
+
+:hidden:`upsample_nearest`
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: upsample_nearest
+
+:hidden:`upsample_bilinear`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: upsample_bilinear
+
+:hidden:`grid_sample`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: grid_sample
+
+:hidden:`affine_grid`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. autofunction:: affine_grid
+
+
+torch.nn.init
+=============
+
+.. currentmodule:: torch.nn.init
+.. autofunction:: calculate_gain
+.. autofunction:: uniform
+.. autofunction:: normal
+.. autofunction:: constant
+.. autofunction:: eye
+.. autofunction:: dirac
+.. autofunction:: xavier_uniform
+.. autofunction:: xavier_normal
+.. autofunction:: kaiming_uniform
+.. autofunction:: kaiming_normal
+.. autofunction:: orthogonal
+.. autofunction:: sparse

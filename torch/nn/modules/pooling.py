@@ -29,7 +29,7 @@ class MaxPool1d(Module):
         stride: the stride of the window. Default value is :attr:`kernel_size`
         padding: implicit zero padding to be added on both sides
         dilation: a parameter that controls the stride of elements in the window
-        return_indices: if True, will return the max indices along with the outputs.
+        return_indices: if ``True``, will return the max indices along with the outputs.
                         Useful when Unpooling later
         ceil_mode: when True, will use `ceil` instead of `floor` to compute the output shape
 
@@ -48,6 +48,7 @@ class MaxPool1d(Module):
     .. _link:
         https://github.com/vdumoulin/conv_arithmetic/blob/master/README.md
     """
+
     def __init__(self, kernel_size, stride=None, padding=0, dilation=1,
                  return_indices=False, ceil_mode=False):
         super(MaxPool1d, self).__init__()
@@ -60,16 +61,17 @@ class MaxPool1d(Module):
 
     def forward(self, input):
         return F.max_pool1d(input, self.kernel_size, self.stride,
-                self.padding, self.dilation, self.ceil_mode,
-                self.return_indices)
+                            self.padding, self.dilation, self.ceil_mode,
+                            self.return_indices)
 
     def __repr__(self):
-        return self.__class__.__name__ + ' (' \
-            + 'size=' + str(self.kernel_size) \
+        return self.__class__.__name__ + '(' \
+            + 'kernel_size=' + str(self.kernel_size) \
             + ', stride=' + str(self.stride) \
             + ', padding=' + str(self.padding) \
             + ', dilation=' + str(self.dilation) \
             + ', ceil_mode=' + str(self.ceil_mode) + ')'
+
 
 class MaxPool2d(Module):
     r"""Applies a 2D max pooling over an input signal composed of several input
@@ -102,7 +104,7 @@ class MaxPool2d(Module):
         stride: the stride of the window. Default value is :attr:`kernel_size`
         padding: implicit zero padding to be added on both sides
         dilation: a parameter that controls the stride of elements in the window
-        return_indices: if True, will return the max indices along with the outputs.
+        return_indices: if ``True``, will return the max indices along with the outputs.
                         Useful when Unpooling later
         ceil_mode: when True, will use `ceil` instead of `floor` to compute the output shape
 
@@ -124,6 +126,7 @@ class MaxPool2d(Module):
     .. _link:
         https://github.com/vdumoulin/conv_arithmetic/blob/master/README.md
     """
+
     def __init__(self, kernel_size, stride=None, padding=0, dilation=1,
                  return_indices=False, ceil_mode=False):
         super(MaxPool2d, self).__init__()
@@ -136,20 +139,20 @@ class MaxPool2d(Module):
 
     def forward(self, input):
         return F.max_pool2d(input, self.kernel_size, self.stride,
-                self.padding, self.dilation, self.ceil_mode,
-                self.return_indices)
+                            self.padding, self.dilation, self.ceil_mode,
+                            self.return_indices)
 
     def __repr__(self):
         kh, kw = _pair(self.kernel_size)
         dh, dw = _pair(self.stride)
         padh, padw = _pair(self.padding)
         dilh, dilw = _pair(self.dilation)
-        padding_str=', padding=(' + str(padh) + ', ' + str(padw) + ')' \
-                      if padh != 0 and padw !=0 else ''
-        dilation_str=(', dilation=(' + str(dilh) + ', ' + str(dilw) + ')' \
+        padding_str = ', padding=(' + str(padh) + ', ' + str(padw) + ')' \
+            if padh != 0 and padw != 0 else ''
+        dilation_str = (', dilation=(' + str(dilh) + ', ' + str(dilw) + ')'
                         if dilh != 0 and dilw != 0 else '')
-        return  self.__class__.__name__ + ' (' \
-            + 'size=(' + str(kh) + ', ' + str(kw) + ')' \
+        return self.__class__.__name__ + '(' \
+            + 'kernel_size=(' + str(kh) + ', ' + str(kw) + ')' \
             + ', stride=(' + str(dh) + ', ' + str(dw) + ')' \
             + padding_str + dilation_str + ')'
 
@@ -158,9 +161,16 @@ class MaxUnpool1d(Module):
     r"""Computes a partial inverse of :class:`MaxPool1d`.
 
     :class:`MaxPool1d` is not fully invertible, since the non-maximal values are lost.
+
     :class:`MaxUnpool1d` takes in as input the output of :class:`MaxPool1d`
     including the indices of the maximal values and computes a partial inverse
     in which all non-maximal values are set to zero.
+
+    .. note:: `MaxPool1d` can map several input sizes to the same output sizes.
+              Hence, the inversion process can get ambiguous.
+              To accommodate this, you can provide the needed output size
+              as an additional argument `output_size` in the forward call.
+              See the Inputs and Example below.
 
     Args:
         kernel_size (int or tuple): Size of the max pooling window.
@@ -168,13 +178,19 @@ class MaxUnpool1d(Module):
             It is set to ``kernel_size`` by default.
         padding (int or tuple): Padding that was added to the input
 
+    Inputs:
+        - `input`: the input Tensor to invert
+        - `indices`: the indices given out by `MaxPool1d`
+        - `output_size` (optional) : a `torch.Size` that specifies the targeted output size
+
     Shape:
         - Input: :math:`(N, C, H_{in})`
         - Output: :math:`(N, C, H_{out})` where
-          :math:`H_{out} = (H_{in} - 1) * stride[0] - 2 * padding[0] + kernel\_size[0]`          
+          :math:`H_{out} = (H_{in} - 1) * stride[0] - 2 * padding[0] + kernel\_size[0]`
           or as given by :attr:`output_size` in the call operator
 
-    Example:
+    Example::
+
         >>> pool = nn.MaxPool1d(2, stride=2, return_indices=True)
         >>> unpool = nn.MaxUnpool1d(2, stride=2)
         >>> input = Variable(torch.Tensor([[[1, 2, 3, 4, 5, 6, 7, 8]]]))
@@ -184,7 +200,24 @@ class MaxUnpool1d(Module):
         (0 ,.,.) =
            0   2   0   4   0   6   0   8
         [torch.FloatTensor of size 1x1x8]
+
+        >>> # Example showcasing the use of output_size
+        >>> input = Variable(torch.Tensor([[[1, 2, 3, 4, 5, 6, 7, 8, 9]]]))
+        >>> output, indices = pool(input)
+        >>> unpool(output, indices, output_size=input.size())
+        Variable containing:
+        (0 ,.,.) =
+           0   2   0   4   0   6   0   8   0
+        [torch.FloatTensor of size 1x1x9]
+
+        >>> unpool(output, indices)
+        Variable containing:
+        (0 ,.,.) =
+           0   2   0   4   0   6   0   8
+        [torch.FloatTensor of size 1x1x8]
+
     """
+
     def __init__(self, kernel_size, stride=None, padding=0):
         super(MaxUnpool1d, self).__init__()
         self.kernel_size = _single(kernel_size)
@@ -195,20 +228,38 @@ class MaxUnpool1d(Module):
         return F.max_unpool1d(input, indices, self.kernel_size, self.stride,
                               self.padding, output_size)
 
+    def __repr__(self):
+        return self.__class__.__name__ + '(' \
+            + 'kernel_size=' + str(self.kernel_size) \
+            + ', stride=' + str(self.stride) \
+            + ', padding=' + str(self.padding) + ')'
+
 
 class MaxUnpool2d(Module):
     r"""Computes a partial inverse of :class:`MaxPool2d`.
 
     :class:`MaxPool2d` is not fully invertible, since the non-maximal values are lost.
+
     :class:`MaxUnpool2d` takes in as input the output of :class:`MaxPool2d`
     including the indices of the maximal values and computes a partial inverse
     in which all non-maximal values are set to zero.
+
+    .. note:: `MaxPool2d` can map several input sizes to the same output sizes.
+              Hence, the inversion process can get ambiguous.
+              To accommodate this, you can provide the needed output size
+              as an additional argument `output_size` in the forward call.
+              See the Inputs and Example below.
 
     Args:
         kernel_size (int or tuple): Size of the max pooling window.
         stride (int or tuple): Stride of the max pooling window.
             It is set to ``kernel_size`` by default.
         padding (int or tuple): Padding that was added to the input
+
+    Inputs:
+        - `input`: the input Tensor to invert
+        - `indices`: the indices given out by `MaxPool2d`
+        - `output_size` (optional) : a `torch.Size` that specifies the targeted output size
 
     Shape:
         - Input: :math:`(N, C, H_{in}, W_{in})`
@@ -217,7 +268,8 @@ class MaxUnpool2d(Module):
           :math:`W_{out} = (W_{in} - 1) * stride[1] -2 * padding[1] + kernel\_size[1]`
           or as given by :attr:`output_size` in the call operator
 
-    Example:
+    Example::
+
         >>> pool = nn.MaxPool2d(2, stride=2, return_indices=True)
         >>> unpool = nn.MaxUnpool2d(2, stride=2)
         >>> input = Variable(torch.Tensor([[[[ 1,  2,  3,  4],
@@ -233,7 +285,20 @@ class MaxUnpool2d(Module):
            0   0   0   0
            0  14   0  16
         [torch.FloatTensor of size 1x1x4x4]
+
+        >>> # specify a different output size than input size
+        >>> unpool(output, indices, output_size=torch.Size([1, 1, 5, 5]))
+        Variable containing:
+        (0 ,0 ,.,.) =
+           0   0   0   0   0
+           6   0   8   0   0
+           0   0   0  14   0
+          16   0   0   0   0
+           0   0   0   0   0
+        [torch.FloatTensor of size 1x1x5x5]
+
     """
+
     def __init__(self, kernel_size, stride=None, padding=0):
         super(MaxUnpool2d, self).__init__()
         self.kernel_size = _pair(kernel_size)
@@ -244,6 +309,12 @@ class MaxUnpool2d(Module):
         return F.max_unpool2d(input, indices, self.kernel_size, self.stride,
                               self.padding, output_size)
 
+    def __repr__(self):
+        return self.__class__.__name__ + '(' \
+            + 'kernel_size=' + str(self.kernel_size) \
+            + ', stride=' + str(self.stride) \
+            + ', padding=' + str(self.padding) + ')'
+
 
 class MaxUnpool3d(Module):
     r"""Computes a partial inverse of :class:`MaxPool3d`.
@@ -253,11 +324,22 @@ class MaxUnpool3d(Module):
     including the indices of the maximal values and computes a partial inverse
     in which all non-maximal values are set to zero.
 
+    .. note:: `MaxPool3d` can map several input sizes to the same output sizes.
+              Hence, the inversion process can get ambiguous.
+              To accommodate this, you can provide the needed output size
+              as an additional argument `output_size` in the forward call.
+              See the Inputs section below.
+
     Args:
         kernel_size (int or tuple): Size of the max pooling window.
         stride (int or tuple): Stride of the max pooling window.
             It is set to ``kernel_size`` by default.
         padding (int or tuple): Padding that was added to the input
+
+    Inputs:
+        - `input`: the input Tensor to invert
+        - `indices`: the indices given out by `MaxPool3d`
+        - `output_size` (optional) : a `torch.Size` that specifies the targeted output size
 
     Shape:
         - Input: :math:`(N, C, D_{in}, H_{in}, W_{in})`
@@ -268,6 +350,7 @@ class MaxUnpool3d(Module):
           or as given by :attr:`output_size` in the call operator
 
     Example::
+
         >>> # pool of square window of size=3, stride=2
         >>> pool = nn.MaxPool3d(3, stride=2, return_indices=True)
         >>> unpool = nn.MaxUnpool3d(3, stride=2)
@@ -276,6 +359,7 @@ class MaxUnpool3d(Module):
         >>> unpooled_output.size()
         torch.Size([20, 16, 51, 33, 15])
     """
+
     def __init__(self, kernel_size, stride=None, padding=0):
         super(MaxUnpool3d, self).__init__()
         self.kernel_size = _triple(kernel_size)
@@ -285,6 +369,12 @@ class MaxUnpool3d(Module):
     def forward(self, input, indices, output_size=None):
         return F.max_unpool3d(input, indices, self.kernel_size, self.stride,
                               self.padding, output_size)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(' \
+            + 'kernel_size=' + str(self.kernel_size) \
+            + ', stride=' + str(self.stride) \
+            + ', padding=' + str(self.padding) + ')'
 
 
 class AvgPool1d(Module):
@@ -330,6 +420,7 @@ class AvgPool1d(Module):
           2  4  6
         [torch.FloatTensor of size 1x1x3]
     """
+
     def __init__(self, kernel_size, stride=None, padding=0, ceil_mode=False,
                  count_include_pad=True):
         super(AvgPool1d, self).__init__()
@@ -343,6 +434,14 @@ class AvgPool1d(Module):
         return F.avg_pool1d(
             input, self.kernel_size, self.stride, self.padding, self.ceil_mode,
             self.count_include_pad)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(' \
+            + 'kernel_size=' + str(self.kernel_size) \
+            + ', stride=' + str(self.stride) \
+            + ', padding=' + str(self.padding) \
+            + ', ceil_mode=' + str(self.ceil_mode) \
+            + ', count_include_pad=' + str(self.count_include_pad) + ')'
 
 
 class AvgPool2d(Module):
@@ -391,8 +490,9 @@ class AvgPool2d(Module):
         >>> input = autograd.Variable(torch.randn(20, 16, 50, 32))
         >>> output = m(input)
     """
+
     def __init__(self, kernel_size, stride=None, padding=0, ceil_mode=False,
-            count_include_pad=True):
+                 count_include_pad=True):
         super(AvgPool2d, self).__init__()
         self.kernel_size = kernel_size
         self.stride = stride or kernel_size
@@ -402,7 +502,15 @@ class AvgPool2d(Module):
 
     def forward(self, input):
         return F.avg_pool2d(input, self.kernel_size, self.stride,
-                self.padding, self.ceil_mode, self.count_include_pad)
+                            self.padding, self.ceil_mode, self.count_include_pad)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(' \
+            + 'kernel_size=' + str(self.kernel_size) \
+            + ', stride=' + str(self.stride) \
+            + ', padding=' + str(self.padding) \
+            + ', ceil_mode=' + str(self.ceil_mode) \
+            + ', count_include_pad=' + str(self.count_include_pad) + ')'
 
 
 class MaxPool3d(Module):
@@ -427,16 +535,16 @@ class MaxPool3d(Module):
 
     The parameters :attr:`kernel_size`, :attr:`stride`, :attr:`padding`, :attr:`dilation` can either be:
 
-        - a single ``int`` -- in which case the same value is used for the height and width dimension
+        - a single ``int`` -- in which case the same value is used for the depth, height and width dimension
         - a ``tuple`` of three ints -- in which case, the first `int` is used for the depth dimension,
-          the second `int` for the width dimension and the third `int` for the width dimension
+          the second `int` for the height dimension and the third `int` for the width dimension
 
     Args:
         kernel_size: the size of the window to take a max over
         stride: the stride of the window. Default value is :attr:`kernel_size`
-        padding: implicit zero padding to be added on both sides
+        padding: implicit zero padding to be added on all three sides
         dilation: a parameter that controls the stride of elements in the window
-        return_indices: if True, will return the max indices along with the outputs.
+        return_indices: if ``True``, will return the max indices along with the outputs.
                         Useful when Unpooling later
         ceil_mode: when True, will use `ceil` instead of `floor` to compute the output shape
 
@@ -459,8 +567,9 @@ class MaxPool3d(Module):
     .. _link:
         https://github.com/vdumoulin/conv_arithmetic/blob/master/README.md
     """
+
     def __init__(self, kernel_size, stride=None, padding=0, dilation=1,
-            return_indices=False, ceil_mode=False):
+                 return_indices=False, ceil_mode=False):
         super(MaxPool3d, self).__init__()
         self.kernel_size = kernel_size
         self.stride = stride or kernel_size
@@ -471,8 +580,17 @@ class MaxPool3d(Module):
 
     def forward(self, input):
         return F.max_pool3d(input, self.kernel_size, self.stride,
-                self.padding, self.dilation, self.ceil_mode,
-                self.return_indices)
+                            self.padding, self.dilation, self.ceil_mode,
+                            self.return_indices)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(' \
+            + 'kernel_size=' + str(self.kernel_size) \
+            + ', stride=' + str(self.stride) \
+            + ', padding=' + str(self.padding) \
+            + ', dilation=' + str(self.dilation) \
+            + ', ceil_mode=' + str(self.ceil_mode) + ')'
+
 
 class AvgPool3d(Module):
     r"""Applies a 3D average pooling over an input signal composed of several input
@@ -489,22 +607,28 @@ class AvgPool3d(Module):
                                input(N_i, C_j, stride[0] * d + k, stride[1] * h + m, stride[2] * w + n)
         \end{array}
 
+    | If :attr:`padding` is non-zero, then the input is implicitly zero-padded on all three sides
+      for :attr:`padding` number of points
+
     The parameters :attr:`kernel_size`, :attr:`stride` can either be:
 
-        - a single ``int`` -- in which case the same value is used for the height and width dimension
+        - a single ``int`` -- in which case the same value is used for the depth, height and width dimension
         - a ``tuple`` of three ints -- in which case, the first `int` is used for the depth dimension,
-          the second `int` for the width dimension and the third `int` for the width dimension
+          the second `int` for the height dimension and the third `int` for the width dimension
 
     Args:
         kernel_size: the size of the window
         stride: the stride of the window. Default value is :attr:`kernel_size`
+        padding: implicit zero padding to be added on all three sides
+        ceil_mode: when True, will use `ceil` instead of `floor` to compute the output shape
+        count_include_pad: when True, will include the zero-padding in the averaging calculation
 
     Shape:
         - Input: :math:`(N, C, D_{in}, H_{in}, W_{in})`
         - Output: :math:`(N, C, D_{out}, H_{out}, W_{out})` where
-          :math:`D_{out} = floor((D_{in}  - kernel\_size[0]) / stride[0] + 1)`
-          :math:`H_{out} = floor((H_{in}  - kernel\_size[1]) / stride[1] + 1)`
-          :math:`W_{out} = floor((W_{in}  - kernel\_size[2]) / stride[2] + 1)`
+          :math:`D_{out} = floor((D_{in} + 2 * padding[0] - kernel\_size[0]) / stride[0] + 1)`
+          :math:`H_{out} = floor((H_{in} + 2 * padding[1] - kernel\_size[1]) / stride[1] + 1)`
+          :math:`W_{out} = floor((W_{in} + 2 * padding[2] - kernel\_size[2]) / stride[2] + 1)`
 
     Examples::
 
@@ -515,17 +639,37 @@ class AvgPool3d(Module):
         >>> input = autograd.Variable(torch.randn(20, 16, 50,44, 31))
         >>> output = m(input)
     """
-    def __init__(self, kernel_size, stride=None):
+
+    def __init__(self, kernel_size, stride=None, padding=0, ceil_mode=False,
+                 count_include_pad=True):
         super(AvgPool3d, self).__init__()
         self.kernel_size = kernel_size
-        self.stride = stride
+        self.stride = stride or kernel_size
+        self.padding = padding
+        self.ceil_mode = ceil_mode
+        self.count_include_pad = count_include_pad
 
     def forward(self, input):
-        return F.avg_pool3d(input, self.kernel_size, self.stride)
+        return F.avg_pool3d(input, self.kernel_size, self.stride,
+                            self.padding, self.ceil_mode, self.count_include_pad)
+
+    def __setstate__(self, d):
+        super(AvgPool3d, self).__setstate__(d)
+        self.__dict__.setdefault('padding', 0)
+        self.__dict__.setdefault('ceil_mode', False)
+        self.__dict__.setdefault('count_include_pad', True)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(' \
+            + 'kernel_size=' + str(self.kernel_size) \
+            + ', stride=' + str(self.stride) \
+            + ', padding=' + str(self.padding) \
+            + ', ceil_mode=' + str(self.ceil_mode) \
+            + ', count_include_pad=' + str(self.count_include_pad) + ')'
 
 
 class FractionalMaxPool2d(Module):
-    """Applies a 2D fractional max pooling over an input signal composed of several input planes.
+    r"""Applies a 2D fractional max pooling over an input signal composed of several input planes.
 
     Fractiona MaxPooling is described in detail in the paper `Fractional MaxPooling`_ by Ben Graham
 
@@ -540,8 +684,8 @@ class FractionalMaxPool2d(Module):
                      Can be a tuple (oH, oW) or a single number oH for a square image oH x oH
         output_ratio: If one wants to have an output size as a ratio of the input size, this option can be given.
                       This has to be a number or tuple in the range (0, 1)
-        return_indices: if True, will return the indices along with the outputs.
-                        Useful to pass to nn.MaxUnpool2d . Default: False
+        return_indices: if ``True``, will return the indices along with the outputs.
+                        Useful to pass to nn.MaxUnpool2d. Default: ``False``
 
     Examples:
         >>> # pool of square window of size=3, and target output size 13x12
@@ -554,36 +698,31 @@ class FractionalMaxPool2d(Module):
     .. _Fractional MaxPooling:
         http://arxiv.org/abs/1412.6071
     """
+
     def __init__(self, kernel_size, output_size=None, output_ratio=None,
-            return_indices=False, _random_samples=None):
+                 return_indices=False, _random_samples=None):
         super(FractionalMaxPool2d, self).__init__()
-        self.kh, self.kw = _pair(kernel_size)
+        self.kernel_size = _pair(kernel_size)
         self.return_indices = return_indices
         self.register_buffer('_random_samples', _random_samples)
-        if output_size is not None:
-            self.outh, self.outw = _pair(output_size)
-            self.rh, self.rw = None, None
-            assert output_ratio is None
-        elif output_ratio is not None:
-            self.outh, self.outw = None, None
-            self.rh, self.rw = _pair(output_ratio)
-            assert output_size is None
-            assert 0 < self.rh < 1
-            assert 0 < self.rw < 1
-        else:
+        self.output_size = _pair(output_size) if output_size is not None else None
+        self.output_ratio = _pair(output_ratio) if output_ratio is not None else None
+        if output_size is None and output_ratio is None:
             raise ValueError("FractionalMaxPool2d requires specifying either "
-                "an output size, or a pooling ratio")
+                             "an output size, or a pooling ratio")
+        if output_size is not None and output_ratio is not None:
+            raise ValueError("only one of output_size and output_ratio may be specified")
+        if self.output_ratio is not None:
+            if not (0 < self.output_ratio[0] < 1 and 0 < self.output_ratio[1] < 1):
+                raise ValueError("output_ratio must be between 0 and 1 (got {})"
+                                 .format(output_ratio))
 
     def forward(self, input):
-        kwargs = {}
-        if self.outh is not None:
-            kwargs['output_size'] = self.outh, self.outw
-        else:
-            kwargs['output_ratio'] = self.rh, self.rw
-        func = self._backend.FractionalMaxPool2d(self.kw, self.kh,
-                return_indices=self.return_indices,
-                _random_samples=self._random_samples, **kwargs)
-        return func(input)
+        samples = None if self._random_samples is None else Variable(self._random_samples)
+        return F.fractional_max_pool2d(
+            input, self.kernel_size, self.output_size, self.output_ratio,
+            self.return_indices,
+            _random_samples=samples)
 
 
 class LPPool2d(Module):
@@ -632,7 +771,284 @@ class LPPool2d(Module):
 
     def forward(self, input):
         return F.lp_pool2d(input, self.norm_type, self.kernel_size,
-                self.stride, self.ceil_mode)
+                           self.stride, self.ceil_mode)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(' \
+            + str(self.norm_type) + ', ' \
+            + str(self.kernel_size) + ', ' \
+            + 'stride=' + str(self.stride) + ', ' \
+            + 'ceil_mode=' + str(self.ceil_mode) + ')'
 
 
-# TODO: AdaptiveMaxPool2d
+class LPPool1d(Module):
+    r"""Applies a 1D power-average pooling over an input signal composed of several input
+    planes.
+
+    On each window, the function computed is: :math:`f(X) = pow(sum(pow(X, p)), 1/p)`
+
+        - At p = infinity, one gets Max Pooling
+        - At p = 1, one gets Average Pooling
+
+    Args:
+        kernel_size: a single int, the size of the window
+        stride: a single int, the stride of the window. Default value is :attr:`kernel_size`
+        ceil_mode: when True, will use `ceil` instead of `floor` to compute the output shape
+
+    Shape:
+        - Input: :math:`(N, C, L_{in})`
+        - Output: :math:`(N, C, L_{out})` where
+          :math:`L_{out} = floor((L_{in} + 2 * padding - kernel\_size) / stride + 1)`
+
+    Examples::
+        >>> # power-2 pool of window of length 3, with stride 2.
+        >>> m = nn.LPPool1d(2, 3, stride=2)
+        >>> input = autograd.Variable(torch.randn(20, 16, 50))
+        >>> output = m(input)
+    """
+
+    def __init__(self, norm_type, kernel_size, stride=None, ceil_mode=False):
+        super(LPPool1d, self).__init__()
+        self.norm_type = norm_type
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.ceil_mode = ceil_mode
+
+    def forward(self, input):
+        return F.lp_pool1d(input, self.norm_type, self.kernel_size,
+                           self.stride, self.ceil_mode)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(' \
+            + str(self.norm_type) + ', ' \
+            + str(self.kernel_size) + ', ' \
+            + 'stride=' + str(self.stride) + ', ' \
+            + 'ceil_mode=' + str(self.ceil_mode) + ')'
+
+
+class AdaptiveMaxPool1d(Module):
+    r"""Applies a 1D adaptive max pooling over an input signal composed of several input planes.
+
+    The output size is H, for any input size.
+    The number of output features is equal to the number of input planes.
+
+    Args:
+        output_size: the target output size H
+        return_indices: if ``True``, will return the indices along with the outputs.
+                        Useful to pass to nn.MaxUnpool1d. Default: ``False``
+
+    Examples:
+        >>> # target output size of 5
+        >>> m = nn.AdaptiveMaxPool1d(5)
+        >>> input = autograd.Variable(torch.randn(1, 64, 8))
+        >>> output = m(input)
+
+    """
+
+    def __init__(self, output_size, return_indices=False):
+        super(AdaptiveMaxPool1d, self).__init__()
+        self.output_size = output_size
+        self.return_indices = return_indices
+
+    def forward(self, input):
+        return F.adaptive_max_pool1d(input, self.output_size, self.return_indices)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(' \
+            + 'output_size=' + str(self.output_size) + ')'
+
+
+class AdaptiveMaxPool2d(Module):
+    r"""Applies a 2D adaptive max pooling over an input signal composed of several input planes.
+
+    The output is of size H x W, for any input size.
+    The number of output features is equal to the number of input planes.
+
+    Args:
+        output_size: the target output size of the image of the form H x W.
+                     Can be a tuple (H, W) or a single H for a square image H x H.
+                     H and W can be either a ``int``, or ``None`` which means the size will
+                     be the same as that of the input.
+        return_indices: if ``True``, will return the indices along with the outputs.
+                        Useful to pass to nn.MaxUnpool2d. Default: ``False``
+
+    Examples:
+        >>> # target output size of 5x7
+        >>> m = nn.AdaptiveMaxPool2d((5,7))
+        >>> input = autograd.Variable(torch.randn(1, 64, 8, 9))
+        >>> output = m(input)
+        >>> # target output size of 7x7 (square)
+        >>> m = nn.AdaptiveMaxPool2d(7)
+        >>> input = autograd.Variable(torch.randn(1, 64, 10, 9))
+        >>> output = m(input)
+        >>> # target output size of 10x7
+        >>> m = nn.AdaptiveMaxPool2d((None, 7))
+        >>> input = autograd.Variable(torch.randn(1, 64, 10, 9))
+        >>> output = m(input)
+
+    """
+
+    def __init__(self, output_size, return_indices=False):
+        super(AdaptiveMaxPool2d, self).__init__()
+        self.output_size = output_size
+        self.return_indices = return_indices
+
+    def forward(self, input):
+        return F.adaptive_max_pool2d(input, self.output_size, self.return_indices)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(' \
+            + 'output_size=' + str(self.output_size) + ')'
+
+
+class AdaptiveMaxPool3d(Module):
+    r"""Applies a 3D adaptive max pooling over an input signal composed of several input planes.
+
+    The output is of size D x H x W, for any input size.
+    The number of output features is equal to the number of input planes.
+
+    Args:
+        output_size: the target output size of the image of the form D x H x W.
+                     Can be a tuple (D, H, W) or a single D for a cube D x D x D.
+                     D, H and W can be either a ``int``, or ``None`` which means the size will
+                     be the same as that of the input.
+
+        return_indices: if ``True``, will return the indices along with the outputs.
+                        Useful to pass to nn.MaxUnpool3d. Default: ``False``
+
+    Examples:
+        >>> # target output size of 5x7x9
+        >>> m = nn.AdaptiveMaxPool3d((5,7,9))
+        >>> input = autograd.Variable(torch.randn(1, 64, 8, 9, 10))
+        >>> output = m(input)
+        >>> # target output size of 7x7x7 (cube)
+        >>> m = nn.AdaptiveMaxPool3d(7)
+        >>> input = autograd.Variable(torch.randn(1, 64, 10, 9, 8))
+        >>> output = m(input)
+        >>> # target output size of 7x9x8
+        >>> m = nn.AdaptiveMaxPool3d((7, None, None))
+        >>> input = autograd.Variable(torch.randn(1, 64, 10, 9, 8))
+        >>> output = m(input)
+
+    """
+
+    def __init__(self, output_size, return_indices=False):
+        super(AdaptiveMaxPool3d, self).__init__()
+        self.output_size = output_size
+        self.return_indices = return_indices
+
+    def forward(self, input):
+        return F.adaptive_max_pool3d(input, self.output_size, self.return_indices)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(' \
+            + 'output_size=' + str(self.output_size) + ')'
+
+
+class AdaptiveAvgPool1d(Module):
+    r"""Applies a 1D adaptive average pooling over an input signal composed of several input planes.
+
+    The output size is H, for any input size.
+    The number of output features is equal to the number of input planes.
+
+    Args:
+        output_size: the target output size H
+
+    Examples:
+        >>> # target output size of 5
+        >>> m = nn.AdaptiveAvgPool1d(5)
+        >>> input = autograd.Variable(torch.randn(1, 64, 8))
+        >>> output = m(input)
+
+    """
+
+    def __init__(self, output_size):
+        super(AdaptiveAvgPool1d, self).__init__()
+        self.output_size = output_size
+
+    def forward(self, input):
+        return F.adaptive_avg_pool1d(input, self.output_size)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(' \
+            + 'output_size=' + str(self.output_size) + ')'
+
+
+class AdaptiveAvgPool2d(Module):
+    r"""Applies a 2D adaptive average pooling over an input signal composed of several input planes.
+
+    The output is of size H x W, for any input size.
+    The number of output features is equal to the number of input planes.
+
+    Args:
+        output_size: the target output size of the image of the form H x W.
+                     Can be a tuple (H, W) or a single H for a square image H x H
+                     H and W can be either a ``int``, or ``None`` which means the size will
+                     be the same as that of the input.
+
+    Examples:
+        >>> # target output size of 5x7
+        >>> m = nn.AdaptiveAvgPool2d((5,7))
+        >>> input = autograd.Variable(torch.randn(1, 64, 8, 9))
+        >>> output = m(input)
+        >>> # target output size of 7x7 (square)
+        >>> m = nn.AdaptiveAvgPool2d(7)
+        >>> input = autograd.Variable(torch.randn(1, 64, 10, 9))
+        >>> output = m(input)
+        >>> # target output size of 10x7
+        >>> m = nn.AdaptiveMaxPool2d((None, 7))
+        >>> input = autograd.Variable(torch.randn(1, 64, 10, 9))
+        >>> output = m(input)
+
+    """
+
+    def __init__(self, output_size):
+        super(AdaptiveAvgPool2d, self).__init__()
+        self.output_size = output_size
+
+    def forward(self, input):
+        return F.adaptive_avg_pool2d(input, self.output_size)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(' \
+            + 'output_size=' + str(self.output_size) + ')'
+
+
+class AdaptiveAvgPool3d(Module):
+    r"""Applies a 3D adaptive average pooling over an input signal composed of several input planes.
+
+    The output is of size D x H x W, for any input size.
+    The number of output features is equal to the number of input planes.
+
+    Args:
+        output_size: the target output size of the form D x H x W.
+                     Can be a tuple (D, H, W) or a single number D for a cube D x D x D
+                     D, H and W can be either a ``int``, or ``None`` which means the size will
+                     be the same as that of the input.
+
+    Examples:
+        >>> # target output size of 5x7x9
+        >>> m = nn.AdaptiveAvgPool3d((5,7,9))
+        >>> input = autograd.Variable(torch.randn(1, 64, 8, 9, 10))
+        >>> output = m(input)
+        >>> # target output size of 7x7x7 (cube)
+        >>> m = nn.AdaptiveAvgPool3d(7)
+        >>> input = autograd.Variable(torch.randn(1, 64, 10, 9, 8))
+        >>> output = m(input)
+        >>> # target output size of 7x9x8
+        >>> m = nn.AdaptiveMaxPool3d((7, None, None))
+        >>> input = autograd.Variable(torch.randn(1, 64, 10, 9, 8))
+        >>> output = m(input)
+
+    """
+
+    def __init__(self, output_size):
+        super(AdaptiveAvgPool3d, self).__init__()
+        self.output_size = output_size
+
+    def forward(self, input):
+        return F.adaptive_avg_pool3d(input, self.output_size)
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(' \
+            + 'output_size=' + str(self.output_size) + ')'

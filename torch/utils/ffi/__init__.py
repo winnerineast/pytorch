@@ -14,9 +14,9 @@ except ImportError:
     raise ImportError("torch.utils.ffi requires the cffi package")
 
 
-if cffi.__version_info__ < (1,4,0):
+if cffi.__version_info__ < (1, 4, 0):
     raise ImportError("torch.utils.ffi requires cffi version >= 1.4, but "
-            "got " + '.'.join(map(str, cffi.__version_info__)))
+                      "got " + '.'.join(map(str, cffi.__version_info__)))
 
 
 def _generate_typedefs():
@@ -50,7 +50,10 @@ __all__ = []
 def _import_symbols(locals):
     for symbol in dir(_lib):
         fn = getattr(_lib, symbol)
-        locals[symbol] = _wrap_function(fn, _ffi)
+        if callable(fn):
+            locals[symbol] = _wrap_function(fn, _ffi)
+        else:
+            locals[symbol] = fn
         __all__.append(symbol)
 
 _import_symbols(locals())
@@ -69,8 +72,12 @@ def _setup_wrapper(with_cuda):
     if with_cuda:
         import torch.cuda
         wrapper_source += '#include <THC/THC.h>\n'
-        cuda_include_dirs = glob.glob('/usr/local/cuda/include')
-        cuda_include_dirs += glob.glob('/Developer/NVIDIA/CUDA-*/include')
+        if os.sys.platform == 'win32':
+            cuda_include_dirs = glob.glob(os.getenv('CUDA_PATH', '') + '/include')
+            cuda_include_dirs += glob.glob(os.getenv('NVTOOLSEXT_PATH', '') + '/include')
+        else:
+            cuda_include_dirs = glob.glob('/usr/local/cuda/include')
+            cuda_include_dirs += glob.glob('/Developer/NVIDIA/CUDA-*/include')
         include_dirs.append(os.path.join(lib_dir, 'include', 'THC'))
         include_dirs.extend(cuda_include_dirs)
     return wrapper_source, include_dirs
@@ -96,7 +103,8 @@ def _create_module_dir(base_path, fullname):
 def _build_extension(ffi, cffi_wrapper_name, target_dir, verbose):
     try:
         tmpdir = tempfile.mkdtemp()
-        libname = cffi_wrapper_name + '.so'
+        ext_suf = '.pyd' if os.sys.platform == 'win32' else '.so'
+        libname = cffi_wrapper_name + ext_suf
         ffi.compile(tmpdir=tmpdir, verbose=verbose, target=libname)
         shutil.copy(os.path.join(tmpdir, libname),
                     os.path.join(target_dir, libname))
@@ -106,13 +114,13 @@ def _build_extension(ffi, cffi_wrapper_name, target_dir, verbose):
 
 def _make_python_wrapper(name, cffi_wrapper_name, target_dir):
     py_source = PY_MODULE_TEMPLATE.substitute(name=name,
-            cffi_wrapper_name=cffi_wrapper_name)
+                                              cffi_wrapper_name=cffi_wrapper_name)
     with open(os.path.join(target_dir, '__init__.py'), 'w') as f:
         f.write(py_source)
 
 
 def create_extension(name, headers, sources, verbose=True, with_cuda=False,
-        package=False, relative_to='.', **kwargs):
+                     package=False, relative_to='.', **kwargs):
     """Creates and configures a cffi.FFI object, that builds PyTorch extension.
 
     Arguments:
@@ -128,7 +136,7 @@ def create_extension(name, headers, sources, verbose=True, with_cuda=False,
             meant to be installed as pip packages) (default: False).
         relative_to (str, optional): path of the build file. Required when
             ``package is True``. It's best to use ``__file__`` for this argument.
-        kwargs: additional arguments that are passed to ffi to declar the
+        kwargs: additional arguments that are passed to ffi to declare the
             extension. See `Extension API reference`_ for details.
 
     .. _`Extension API reference`: https://docs.python.org/3/distutils/apiref.html#distutils.core.Extension
@@ -138,10 +146,23 @@ def create_extension(name, headers, sources, verbose=True, with_cuda=False,
     if not package:
         cffi_wrapper_name = '_' + name_suffix
     else:
-        cffi_wrapper_name = name.rpartition('.')[0] + '._' + name_suffix
+        cffi_wrapper_name = (name.rpartition('.')[0] +
+                             '.{0}._{0}'.format(name_suffix))
 
     wrapper_source, include_dirs = _setup_wrapper(with_cuda)
     include_dirs.extend(kwargs.pop('include_dirs', []))
+
+    if os.sys.platform == 'win32':
+        library_dirs = glob.glob(os.getenv('CUDA_PATH', '') + '/lib/x64')
+        library_dirs += glob.glob(os.getenv('NVTOOLSEXT_PATH', '') + '/lib/x64')
+
+        here = os.path.abspath(os.path.dirname(__file__))
+        lib_dir = os.path.join(here, '..', '..', 'lib')
+
+        library_dirs.append(os.path.join(lib_dir))
+    else:
+        library_dirs = []
+    library_dirs.extend(kwargs.pop('library_dirs', []))
 
     if isinstance(headers, str):
         headers = [headers]
@@ -154,10 +175,12 @@ def create_extension(name, headers, sources, verbose=True, with_cuda=False,
     sources = [os.path.join(base_path, src) for src in sources]
     ffi.set_source(cffi_wrapper_name, wrapper_source + all_headers_source,
                    sources=sources,
-                   include_dirs=include_dirs, **kwargs)
-    ffi.cdef(_typedefs + all_headers_source);
+                   include_dirs=include_dirs,
+                   library_dirs=library_dirs, **kwargs)
+    ffi.cdef(_typedefs + all_headers_source)
 
     _make_python_wrapper(name_suffix, '_' + name_suffix, target_dir)
+
     def build():
         _build_extension(ffi, cffi_wrapper_name, target_dir, verbose)
     ffi.build = build
@@ -168,9 +191,9 @@ def _wrap_function(function, ffi):
     @wraps(function)
     def safe_call(*args, **kwargs):
         args = tuple(ffi.cast(_torch_to_cffi.get(type(arg), 'void') + '*', arg._cdata)
-                if torch.is_tensor(arg) or torch.is_storage(arg)
-                else arg
-                for arg in args)
+                     if torch.is_tensor(arg) or torch.is_storage(arg)
+                     else arg
+                     for arg in args)
         args = (function,) + args
         result = torch._C._safe_call(*args, **kwargs)
         if isinstance(result, ffi.CData):
@@ -182,4 +205,3 @@ def _wrap_function(function, ffi):
                     return _cffi_to_torch[cname](cdata=cdata)
         return result
     return safe_call
-

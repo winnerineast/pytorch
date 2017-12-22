@@ -9,6 +9,8 @@ Automatic differentiation package - torch.autograd
 
 .. autofunction:: backward
 
+.. autofunction:: grad
+
 Variable
 --------
 
@@ -20,7 +22,7 @@ of a couple in-place methods, that would overwrite inputs required for
 gradient computation). In most cases Tensors can be safely replaced with
 Variables and the code will remain to work just fine. Because of this,
 we're not documenting all the operations on variables, and you should
-refere to :class:`torch.Tensor` docs for this purpose.
+refer to :class:`torch.Tensor` docs for this purpose.
 
 In-place operations on Variables
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -38,8 +40,8 @@ All :class:`Variable` s keep track of in-place operations applied to them, and
 if the implementation detects that a variable was saved for backward in one of
 the functions, but it was modified in-place afterwards, an error will be raised
 once backward pass is started. This ensures that if you're using in-place
-functions and not seing any errors, you can be sure that the computed gradients
-are correct.
+functions and not seeing any errors, you can be sure that the computed
+gradients are correct.
 
 
 .. autoclass:: Variable
@@ -51,3 +53,19 @@ are correct.
 .. autoclass:: Function
     :members:
 
+Profiler
+--------
+
+Autograd includes a profiler that lets you inspect the cost of different
+operators inside your model - both on the CPU and GPU. There are two modes
+implemented at the moment - CPU-only using :class:`~torch.autograd.profiler.profile`.
+and nvprof based (registers both CPU and GPU activity) using
+:class:`~torch.autograd.profiler.emit_nvtx`.
+
+.. autoclass:: torch.autograd.profiler.profile
+    :members:
+
+.. autoclass:: torch.autograd.profiler.emit_nvtx
+    :members:
+
+.. autofunction:: torch.autograd.profiler.load_nvprof

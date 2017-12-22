@@ -16,6 +16,15 @@ To construct an :class:`Optimizer` you have to give it an iterable containing th
 parameters (all should be :class:`~torch.autograd.Variable` s) to optimize. Then,
 you can specify optimizer-specific options such as the learning rate, weight decay, etc.
 
+.. note::
+
+    If you need to move a model to GPU via `.cuda()`, please do so before
+    constructing optimizers for it. Parameters of a model after `.cuda()` will
+    be different objects with those before the call.
+
+    In general, you should make sure that optimized parameters live in
+    consistent locations when optimizers are constructed and used.
+
 Example::
 
     optimizer = optim.SGD(model.parameters(), lr = 0.01, momentum=0.9)
@@ -102,13 +111,37 @@ Algorithms
     :members:
 .. autoclass:: Adam
     :members:
+.. autoclass:: SparseAdam
+    :members:
 .. autoclass:: Adamax
     :members:
 .. autoclass:: ASGD
+    :members:
+.. autoclass:: LBFGS
     :members:
 .. autoclass:: RMSprop
     :members:
 .. autoclass:: Rprop
     :members:
 .. autoclass:: SGD
+    :members:
+
+How to adjust Learning Rate
+---------------------------
+
+:mod:`torch.optim.lr_scheduler` provides several methods to adjust the learning
+rate based on the number of epochs. :class:`torch.optim.lr_scheduler.ReduceLROnPlateau`
+allows dynamic learning rate reducing based on some validation measurements.
+
+.. autoclass:: torch.optim.lr_scheduler.LambdaLR
+    :members:
+.. autoclass:: torch.optim.lr_scheduler.StepLR
+    :members:
+.. autoclass:: torch.optim.lr_scheduler.MultiStepLR
+    :members:
+.. autoclass:: torch.optim.lr_scheduler.ExponentialLR
+    :members:
+.. autoclass:: torch.optim.lr_scheduler.CosineAnnealingLR
+    :members:
+.. autoclass:: torch.optim.lr_scheduler.ReduceLROnPlateau
     :members:

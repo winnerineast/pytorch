@@ -2,6 +2,7 @@ import torch
 from .Module import Module
 from .utils import clear
 
+
 class Identity(Module):
 
     def updateOutput(self, input):
@@ -13,9 +14,4 @@ class Identity(Module):
         return self.gradInput
 
     def clearState(self):
-        clear(self, [
-           'output',
-           'gradInput',
-        ])
-        return super(Identity, self).clearState()
-
+        clear(self, 'gradInput')

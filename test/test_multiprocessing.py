@@ -11,13 +11,25 @@ import torch.cuda
 import torch.multiprocessing as mp
 from torch.autograd import Variable
 from torch.nn import Parameter
-from common import TestCase
+from common import TestCase, run_tests, IS_WINDOWS
 
 
+TEST_REPEATS = 30
 HAS_SHM_FILES = os.path.isdir('/dev/shm')
 TEST_CUDA_IPC = torch.cuda.is_available() and \
-                sys.version_info[0] == 3 and \
-                sys.platform != 'darwin'
+    sys.version_info[0] == 3 and \
+    sys.platform != 'darwin'
+TEST_MULTIGPU = TEST_CUDA_IPC and torch.cuda.device_count() > 1
+
+
+class SubProcess(mp.Process):
+    def __init__(self, tensor):
+        super(SubProcess, self).__init__()
+        self.tensor = tensor
+        self.daemon = True
+
+    def run(self):
+        self.tensor.add_(3)
 
 
 def simple_fill(queue, event):
@@ -36,6 +48,11 @@ def send_tensor(queue, event, tp):
     queue.put(t)
     queue.put(t)
     event.wait()
+
+
+def call_backward():
+    x = torch.autograd.Variable(torch.randn(3, 3), requires_grad=True)
+    x.sum().backward()
 
 
 def sum_tensors(inq, outq):
@@ -73,14 +90,13 @@ def autograd_sharing(queue, ready, master_modified):
     ready.set()
     master_modified.wait()
 
-    expected_var = torch.range(1, 25).view(5, 5)
-    expected_var[0,0] = 1000
+    expected_var = torch.arange(1, 26).view(5, 5)
+    expected_var[0, 0] = 1000
     is_ok = var.data.equal(expected_var)
     var.data[:] = torch.ones(5, 5)
 
-    if var.grad is not None:
-        is_ok &= var.grad.data.equal(torch.ones(5, 5) * 4)
-        var.grad.data[:] = torch.ones(5, 5)
+    is_ok &= var.grad is None
+    var._grad = Variable(torch.ones(5, 5), requires_grad=False)
 
     queue.put(is_ok)
 
@@ -111,9 +127,10 @@ class leak_checker(object):
             # test is no more than 4 higher than the 10th available at the
             # start. This attempts to catch file descriptor leaks, but allows
             # one-off initialization that may use up a file descriptor
-            available_fds = self._get_next_fds(10)
-            self.test_case.assertLessEqual(
-                available_fds[-1] - self.next_fds[-1], 4)
+            # TODO: Disabled because this check is too flaky
+            # available_fds = self._get_next_fds(10)
+            # self.test_case.assertLessEqual(
+            #     available_fds[-1] - self.next_fds[-1], 5)
             self.test_case.assertFalse(self.has_shm_files())
         return False
 
@@ -148,9 +165,6 @@ class leak_checker(object):
 
 class TestMultiprocessing(TestCase):
 
-    def __init__(self, *args, **kwargs):
-        super(TestMultiprocessing, self).__init__(*args, **kwargs)
-
     def _test_sharing(self, ctx=mp, type=torch.FloatTensor, repeat=1):
         def test_fill():
             x = torch.zeros(5, 5).type(type)
@@ -159,9 +173,11 @@ class TestMultiprocessing(TestCase):
             data = [x, x[:, 1]]
             q.put(data)
             p = ctx.Process(target=simple_fill, args=(q, e))
+            p.daemon = True
             lc.check_pid(p.pid)
             p.start()
-            e.wait()
+            e.wait(10)
+            self.assertTrue(e.is_set())
             self.assertTrue(data[0].eq(4).all())
             self.assertTrue(data[1].eq(4).all())
             p.join(1)
@@ -171,6 +187,7 @@ class TestMultiprocessing(TestCase):
             q = ctx.Queue()
             e = ctx.Event()
             p = ctx.Process(target=send_tensor, args=(q, e, type))
+            p.daemon = True
             lc.check_pid(p.pid)
             p.start()
             t1 = q.get()
@@ -182,17 +199,17 @@ class TestMultiprocessing(TestCase):
             self.assertFalse(p.is_alive())
 
         with leak_checker(self) as lc:
-            for i in range(repeat):
+            for _ in range(repeat):
                 test_fill()
                 test_receive()
 
     def _test_preserve_sharing(self, ctx=mp, repeat=1):
         def do_test():
             x = torch.randn(5, 5)
-            data = [x.storage(), x.storage()[1:4], x, x[2], x[:,1]]
+            data = [x.storage(), x.storage()[1:4], x, x[2], x[:, 1]]
             q = ctx.Queue()
             q.put(data)
-            new_data = q.get()
+            new_data = q.get(timeout=1)
             self.assertEqual(new_data, data, 0)
             storage_cdata = data[0]._cdata
             self.assertEqual(new_data[0]._cdata, storage_cdata)
@@ -227,29 +244,29 @@ class TestMultiprocessing(TestCase):
             for i in range(repeat):
                 do_test()
 
-    @unittest.skipIf(platform == 'darwin', "file descriptor strategy is not supported on OS X")
+    @unittest.skipIf(platform == 'darwin', "file descriptor strategy is not supported on macOS")
     def test_fd_sharing(self):
-        self._test_sharing(repeat=20)
+        self._test_sharing(repeat=TEST_REPEATS)
 
-    @unittest.skipIf(platform == 'darwin', "file descriptor strategy is not supported on OS X")
+    @unittest.skipIf(platform == 'darwin', "file descriptor strategy is not supported on macOS")
     def test_fd_preserve_sharing(self):
-        self._test_preserve_sharing(repeat=20)
+        self._test_preserve_sharing(repeat=TEST_REPEATS)
 
-    @unittest.skipIf(platform == 'darwin', "file descriptor strategy is not supported on OS X")
+    @unittest.skipIf(platform == 'darwin', "file descriptor strategy is not supported on macOS")
     def test_fd_pool(self):
-        self._test_pool(repeat=20)
+        self._test_pool(repeat=TEST_REPEATS)
 
     def test_fs_sharing(self):
         with fs_sharing():
-            self._test_sharing(repeat=20)
+            self._test_sharing(repeat=TEST_REPEATS)
 
     def test_fs_preserve_sharing(self):
         with fs_sharing():
-            self._test_preserve_sharing(repeat=20)
+            self._test_preserve_sharing(repeat=TEST_REPEATS)
 
     def test_fs_pool(self):
         with fs_sharing():
-            self._test_pool(repeat=20)
+            self._test_pool(repeat=TEST_REPEATS)
 
     @unittest.skipIf(not HAS_SHM_FILES, "don't not how to check if shm files exist")
     def test_fs(self):
@@ -263,38 +280,32 @@ class TestMultiprocessing(TestCase):
             q.get()
 
         with fs_sharing(), leak_checker(self) as lc:
-            for i in range(20):
+            for _ in range(TEST_REPEATS):
                 queue_put()
 
     def test_inherit_tensor(self):
-        class SubProcess(mp.Process):
-            def __init__(self, tensor):
-                super(SubProcess, self).__init__()
-                self.tensor = tensor
-
-            def run(self):
-                self.tensor.add_(3)
-
         t = torch.zeros(5, 5)
         p = SubProcess(t.share_memory_())
         p.start()
-        p.join()
+        p.join(1)
         self.assertEqual(t, torch.ones(5, 5) * 3, 0)
 
+    @unittest.skipIf(IS_WINDOWS, 'NYI: not supported on Windows')
     @unittest.skipIf(not TEST_CUDA_IPC, 'CUDA IPC not available')
     def test_cuda(self):
         torch.cuda.FloatTensor([1])  # initialize CUDA outside of leak checker
         self._test_sharing(mp.get_context('spawn'), torch.cuda.FloatTensor)
 
-
     @unittest.skipIf(not TEST_CUDA_IPC, 'CUDA IPC not available')
+    @unittest.skipIf(not TEST_MULTIGPU, 'found only 1 GPU')
     def test_cuda_small_tensors(self):
         # Check multiple small tensors which will likely use the same
         # underlying cached allocation
         ctx = mp.get_context('spawn')
         tensors = []
         for i in range(5):
-            tensors += [torch.range(i * 5, (i * 5) + 4).cuda()]
+            device = i % 2
+            tensors += [torch.arange(i * 5, (i + 1) * 5).cuda(device)]
 
         inq = ctx.Queue()
         outq = ctx.Queue()
@@ -309,11 +320,12 @@ class TestMultiprocessing(TestCase):
 
         for i, tensor in enumerate(tensors):
             v, device, tensor_size, storage_size = results[i]
-            self.assertEqual(v, torch.range(i * 5, (i * 5) + 4).sum())
-            self.assertEqual(device, 0)
+            self.assertEqual(v, torch.arange(i * 5, (i + 1) * 5).sum())
+            self.assertEqual(device, i % 2)
             self.assertEqual(tensor_size, 5)
             self.assertEqual(storage_size, 5)
 
+    @unittest.skipIf(IS_WINDOWS, 'NYI: not supported on Windows')
     @unittest.skipIf(not torch.cuda.is_available(), 'CUDA not available')
     def test_cuda_bad_call(self):
         # Initialize CUDA
@@ -326,6 +338,7 @@ class TestMultiprocessing(TestCase):
         p.join()
         self.assertIsInstance(outq.get(), RuntimeError)
 
+    @unittest.skipIf(IS_WINDOWS, 'NYI: not supported on Windows')
     @unittest.skipIf(not TEST_CUDA_IPC, 'CUDA IPC not available')
     def test_event(self):
         ctx = mp.get_context('spawn')
@@ -355,38 +368,37 @@ class TestMultiprocessing(TestCase):
         master_modified = mp.Event()
         queue = mp.Queue()
         p = mp.Process(target=autograd_sharing, args=(queue, ready, master_modified))
+        p.daemon = True
         p.start()
+        var._grad = Variable(torch.zeros(5, 5), requires_grad=False)
         queue.put(var)
 
         ready.wait()
-        var.data[0,0] = 1000
-        if var.grad is not None:
-            var.grad.data[:] = torch.ones(5, 5) * 4
+        var.data[0, 0] = 1000
+        var.grad.data[:] = torch.ones(5, 5) * 4
         master_modified.set()
 
         worker_ok = queue.get()
         self.assertTrue(worker_ok)
 
         self.assertEqual(var.data, torch.ones(5, 5))
-        if var.grad is not None:
-            self.assertEqual(var.grad.data, torch.ones(5, 5))
-        p.join()
+        self.assertEqual(var.grad.data, torch.ones(5, 5) * 4)
+        p.join(1)
+        self.assertFalse(p.is_alive())
 
     def test_variable_sharing(self):
-        configs = [
-            (True, False),
-            (False, False),
-            (False, True),
-        ]
-        for requires_grad, volatile in configs:
-            var = Variable(torch.range(1, 25).view(5, 5),
-                            requires_grad=requires_grad,
-                            volatile=volatile)
+        for requires_grad in [True, False]:
+            var = Variable(torch.arange(1, 26).view(5, 5),
+                           requires_grad=requires_grad)
             self._test_autograd_sharing(var)
 
     def test_parameter_sharing(self):
-        param = Parameter(torch.range(1, 25).view(5, 5))
+        param = Parameter(torch.arange(1, 26).view(5, 5))
         self._test_autograd_sharing(param)
+
+    def test_empty_shared(self):
+        t = torch.Tensor()
+        t.share_memory_()
 
     def _test_is_shared(self):
         t = torch.randn(5, 5)
@@ -394,7 +406,7 @@ class TestMultiprocessing(TestCase):
         t.share_memory_()
         self.assertTrue(t.is_shared())
 
-    @unittest.skipIf(platform == 'darwin', "file descriptor strategy is not supported on OS X")
+    @unittest.skipIf(platform == 'darwin', "file descriptor strategy is not supported on macOS")
     def test_is_shared(self):
         self._test_is_shared()
 
@@ -407,6 +419,14 @@ class TestMultiprocessing(TestCase):
         t = torch.randn(5, 5).cuda()
         self.assertTrue(t.is_shared())
 
+    def test_backwards_fork(self):
+        r"backwards() should succeed when called before and after a fork"
+        call_backward()
+        p = mp.Process(target=call_backward)
+        p.start()
+        p.join(1)
+        self.assertFalse(p.is_alive())
+
 
 if __name__ == '__main__':
-    unittest.main()
+    run_tests()

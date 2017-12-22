@@ -4,9 +4,9 @@ from .. import functional as F
 
 class PixelShuffle(Module):
     r"""Rearranges elements in a Tensor of shape :math:`(*, C * r^2, H, W]` to a
-    tensor of shape :math:`(C, H * r, W * r)`. 
-    
-    This is useful for implementing efficient sub-pixel convolution 
+    tensor of shape :math:`(C, H * r, W * r)`.
+
+    This is useful for implementing efficient sub-pixel convolution
     with a stride of :math:`1/r`.
 
     Look at the paper:
@@ -40,4 +40,4 @@ class PixelShuffle(Module):
         return F.pixel_shuffle(input, self.upscale_factor)
 
     def __repr__(self):
-        return self.__class__.__name__ + ' (upscale_factor=' + str(self.upscale_factor) + ')'
+        return self.__class__.__name__ + '(upscale_factor=' + str(self.upscale_factor) + ')'

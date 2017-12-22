@@ -1,12 +1,13 @@
 import torch
 from .Module import Module
 
+
 class SoftPlus(Module):
 
-    def __init__(self, beta=1):
+    def __init__(self, beta=1, threshold=20):
         super(SoftPlus, self).__init__()
-        self.beta = beta       # Beta controls sharpness of transfer function
-        self.threshold = 20    # Avoid floating point issues with exp(x), x>20
+        self.beta = beta              # Beta controls sharpness of transfer function
+        self.threshold = threshold    # Avoid floating point issues with exp(x), x>20
 
     def updateOutput(self, input):
         # f(x) = 1/beta * log(1 + exp(beta * x))
@@ -35,4 +36,3 @@ class SoftPlus(Module):
             self.threshold
         )
         return self.gradInput
-

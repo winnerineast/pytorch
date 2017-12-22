@@ -1,6 +1,7 @@
 from . import CWrapPlugin
 from string import Template
 
+
 class ConstantArguments(CWrapPlugin):
 
     def process_declarations(self, declarations):
@@ -17,6 +18,4 @@ class ConstantArguments(CWrapPlugin):
 
     def get_arg_accessor(self, arg, option):
         if arg['type'] == 'CONSTANT':
-            return arg['name']
-
-
+            return arg.get('default', arg['name'])

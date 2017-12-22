@@ -8,6 +8,7 @@ Tensors
 .. autofunction:: is_storage
 .. autofunction:: set_default_tensor_type
 .. autofunction:: numel
+.. autofunction:: set_printoptions
 
 
 Creation Ops
@@ -17,12 +18,11 @@ Creation Ops
 .. autofunction:: linspace
 .. autofunction:: logspace
 .. autofunction:: ones
-.. autofunction:: rand
-.. autofunction:: randn
-.. autofunction:: randperm
+.. autofunction:: ones_like
+.. autofunction:: arange
 .. autofunction:: range
 .. autofunction:: zeros
-
+.. autofunction:: zeros_like
 
 Indexing, Slicing, Joining, Mutating Ops
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -36,7 +36,11 @@ Indexing, Slicing, Joining, Mutating Ops
 .. autofunction:: squeeze
 .. autofunction:: stack
 .. autofunction:: t
+.. autofunction:: take
 .. autofunction:: transpose
+.. autofunction:: unbind
+.. autofunction:: unsqueeze
+.. autofunction:: where
 
 
 Random sampling
@@ -49,6 +53,23 @@ Random sampling
 .. autofunction:: bernoulli
 .. autofunction:: multinomial
 .. autofunction:: normal
+.. autofunction:: rand
+.. autofunction:: randn
+.. autofunction:: randperm
+
+In-place random sampling
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+There are a few more in-place random sampling functions defined on Tensors as well. Click through to refer to their documentation:
+
+- :func:`torch.Tensor.bernoulli_` - in-place version of :func:`torch.bernoulli`
+- :func:`torch.Tensor.cauchy_` - numbers drawn from the Cauchy distribution
+- :func:`torch.Tensor.exponential_` - numbers drawn from the exponential distribution
+- :func:`torch.Tensor.geometric_` - elements drawn from the geometric distribution
+- :func:`torch.Tensor.log_normal_` - samples from the log-normal distribution
+- :func:`torch.Tensor.normal_` - in-place version of :func:`torch.normal`
+- :func:`torch.Tensor.random_` - numbers sampled from the discrete uniform distribution
+- :func:`torch.Tensor.uniform_` - numbers sampled from the uniform distribution
 
 
 Serialization
@@ -82,6 +103,8 @@ Pointwise Ops
 .. autofunction:: cos
 .. autofunction:: cosh
 .. autofunction:: div
+.. autofunction:: erf
+.. autofunction:: erfinv
 .. autofunction:: exp
 .. autofunction:: floor
 .. autofunction:: fmod
@@ -137,6 +160,14 @@ Comparison Ops
 .. autofunction:: topk
 
 
+Spectral Ops
+~~~~~~~~~~~~~~~~~~~~~~
+.. autofunction:: stft
+.. autofunction:: hann_window
+.. autofunction:: hamming_window
+.. autofunction:: bartlett_window
+
+
 Other Operations
 ~~~~~~~~~~~~~~~~~~~~~~
 .. autofunction:: cross
@@ -157,6 +188,8 @@ BLAS and LAPACK Operations
 .. autofunction:: addr
 .. autofunction:: baddbmm
 .. autofunction:: bmm
+.. autofunction:: btrifact
+.. autofunction:: btrisolve
 .. autofunction:: dot
 .. autofunction:: eig
 .. autofunction:: gels
@@ -164,6 +197,8 @@ BLAS and LAPACK Operations
 .. autofunction:: ger
 .. autofunction:: gesv
 .. autofunction:: inverse
+.. autofunction:: det
+.. autofunction:: matmul
 .. autofunction:: mm
 .. autofunction:: mv
 .. autofunction:: orgqr
@@ -176,4 +211,3 @@ BLAS and LAPACK Operations
 .. autofunction:: svd
 .. autofunction:: symeig
 .. autofunction:: trtrs
-

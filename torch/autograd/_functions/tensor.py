@@ -1,575 +1,322 @@
 from functools import reduce
 import torch
-from torch._utils import _accumulate
 
-from ..function import Function, InplaceFunction
-
-
-class Index(Function):
-
-    def __init__(self, index):
-        super(Index, self).__init__()
-        self.index = index
-
-    def forward(self, i):
-        self.input_size = i.size()
-        result = i.index(self.index)
-        self.mark_shared_storage((i, result))
-        return result
-
-    def backward(self, grad_output):
-        # TODO: this won't have to be zeroed
-        grad_input = grad_output.new(self.input_size).zero_()
-        grad_input.index(self.index).copy_(grad_output)
-        return grad_input
-
-
-class SetItem(InplaceFunction):
-
-    def __init__(self, index, value=None):
-        super(SetItem, self).__init__(True)
-        self.index = index
-        self.value = value
-
-    def forward(self, i, value=None):
-        self.mark_dirty(i)
-        if value is None:
-            value = self.value
-        i.set_index(self.index, value)
-        return i
-
-    def backward(self, grad_output):
-        if self.value is None:
-            grad_input = grad_output.clone()
-            grad_input.set_index(self.index, 0)
-            grad_value = grad_output.index(self.index).clone()
-            return grad_input, grad_value
-        else:
-            grad_input = grad_output.clone()
-            grad_input.set_index(self.index, 0)
-            return grad_input
-
-
-class NoGrad(Function):
-
-    def forward(self, i):
-        result = i.new(i)
-        self.mark_non_differentiable(result)
-        self.mark_shared_storage((i, result))
-        return result
-
-    def backward(self, grad_output):
-        assert False, "backward of NoGrad should never be called"
-
-    def _do_forward(self, *args, **kwargs):
-        result = super(NoGrad, self)._do_forward(*args, **kwargs)
-        self.requires_grad = False
-        return result
-
-    __call__ = _do_forward
-
-
-class Transpose(Function):
-
-    def __init__(self, *dims):
-        super(Transpose, self).__init__()
-        assert len(dims) == 2
-        self.dims = dims
-
-    def forward(self, i):
-        result = i.transpose(*self.dims)
-        self.mark_shared_storage((i, result))
-        return result
-
-    def backward(self, grad_output):
-        return grad_output.transpose(*self.dims)
-
-
-class View(Function):
-
-    def __init__(self, *sizes):
-        super(View, self).__init__()
-        self.sizes = sizes
-
-    def forward(self, i):
-        self.input_size = i.size()
-        result = i.view(*self.sizes)
-        self.mark_shared_storage((i, result))
-        return result
-
-    def backward(self, grad_output):
-        # TODO: not sure if this clone is necessary
-        return grad_output.clone().view(self.input_size)
-
-
-class Expand(Function):
-    def __init__(self, sizes):
-        super(Expand, self).__init__()
-        self.sizes = sizes
-        self.expanded_dims = []
-
-    def forward(self, i):
-        self.expanded_dims = [dim for dim, (expanded, original)
-                in enumerate(zip(self.sizes, i.size()))
-                if expanded != original]
-        result = i.expand(*self.sizes)
-        self.mark_shared_storage((i, result))
-        return result
-
-    def backward(self, grad_output):
-        grad_input = grad_output
-        for dim in self.expanded_dims:
-            grad_input = grad_input.sum(dim)
-        return grad_input
+from ..function import Function
+from ..variable import Variable
 
 
 class Type(Function):
 
-    def __init__(self, dest_type):
-        super(Type, self).__init__()
-        self.dest_type = dest_type
+    @staticmethod
+    def forward(ctx, i, dest_type):
+        ctx.input_type = type(i)
+        ctx.input_device = -1 if not i.is_cuda else i.get_device()
+        return i.type(dest_type)
 
-    def forward(self, i):
-        assert self.dest_type != type(i)
-        self.input_type = type(i)
-        return i.type(self.dest_type)
-
-    def backward(self, grad_output):
-        return grad_output.type(self.input_type)
-
-
-class CudaTransfer(Function):
-
-    def __init__(self, device_id=None, async=False):
-        super(CudaTransfer, self).__init__()
-        self.device_id = device_id
-        self.async = async
-
-    def forward(self, i):
-        self.source_device = -1 if not i.is_cuda else i.get_device()
-        self.source_was_cuda = i.is_cuda
-        if self.device_id:
-            return i.cuda(self.device_id, async=self.async)
+    @staticmethod
+    def backward(ctx, grad_output):
+        if ctx.input_device == -1:
+            return grad_output.type(ctx.input_type), None
         else:
-            return i.cuda(async=self.async)
-
-    def backward(self, grad_output):
-        if self.source_device != -1:
-            return grad_output.cuda(self.source_device)
-        elif self.source_was_cuda:
-            return grad_output
-        else:
-            return grad_output.cpu()
+            with torch.cuda.device(ctx.input_device):
+                return grad_output.type(ctx.input_type), None
 
 
-class Permute(Function):
-
-    def __init__(self, dim_indices):
-        super(Permute, self).__init__()
-        self.dim_indices = dim_indices
-        self.rev_dim_indices = [None for _ in range(len(dim_indices))]
-        for i, dim_idx in enumerate(self.dim_indices):
-            self.rev_dim_indices[dim_idx] = i
-
-    def forward(self, i):
-        result = i.permute(*self.dim_indices)
-        self.mark_shared_storage((i, result))
-        return result
-
-    def backward(self, grad_output):
-        return grad_output.permute(*self.rev_dim_indices)
-
-
-class IndexAdd(InplaceFunction):
-
-    def __init__(self, dim, inplace=False):
-        super(IndexAdd, self).__init__(inplace)
-        self.dim = dim
-
-    def forward(self, tensor1, index, tensor2):
-        assert not self.needs_input_grad[1]
-        if self.needs_input_grad[2]:
-            self.save_for_backward(index)
-        if not self.inplace:
-            tensor1 = tensor1.clone()
-        else:
-            self.mark_dirty(tensor1)
-        return tensor1.index_add_(self.dim, index, tensor2)
-
-    def backward(self, grad_output):
-        grad_tensor1 = grad_tensor2 = None
-
-        if self.needs_input_grad[0]:
-            grad_tensor1 = grad_output
-
-        if self.needs_input_grad[2]:
-            index, = self.saved_tensors
-            grad_tensor2 = grad_output.index_select(self.dim, index)
-
-        return grad_tensor1, None, grad_tensor2
-
-
-class IndexCopy(InplaceFunction):
-
-    def __init__(self, dim, inplace=False):
-        super(IndexCopy, self).__init__(inplace)
-        self.dim = dim
-
-    def forward(self, tensor1, index, tensor2):
-        assert not self.needs_input_grad[1]
-        if any(self.needs_input_grad):
-            self.save_for_backward(index)
-        if not self.inplace:
-            tensor1 = tensor1.clone()
-        else:
-            self.mark_dirty(tensor1)
-        return tensor1.index_copy_(self.dim, index, tensor2)
-
-    def backward(self, grad_output):
-        grad_tensor1 = grad_tensor2 = None
-
-        if any(self.needs_input_grad):
-            index, = self.saved_tensors
-
-        if self.needs_input_grad[0]:
-            grad_tensor1 = grad_output.clone().index_fill_(self.dim, index, 0)
-
-        if self.needs_input_grad[2]:
-            grad_tensor2 = grad_output.index_select(self.dim, index)
-
-        return grad_tensor1, None, grad_tensor2
-
-
-class IndexFill(InplaceFunction):
-
-    def __init__(self, dim, value, inplace=False):
-        super(IndexFill, self).__init__(inplace)
-        self.dim = dim
-        self.value = value
-
-    def forward(self, tensor, index):
-        assert not self.needs_input_grad[1]
-        if self.needs_input_grad[0]:
-            self.save_for_backward(index)
-        if not self.inplace:
-            tensor = tensor.clone()
-        else:
-            self.mark_dirty(tensor)
-        return tensor.index_fill_(self.dim, index, self.value)
-
-    def backward(self, grad_output):
-        grad_tensor = None
-
-        if self.needs_input_grad[0]:
-            index, = self.saved_tensors
-            grad_tensor = grad_output.clone().index_fill_(self.dim, index, 0)
-
-        return grad_tensor, None
-
-
-class IndexSelect(Function):
-
-    def __init__(self, dim):
-        super(IndexSelect, self).__init__()
-        self.dim = dim
-
-    def forward(self, tensor, index):
-        assert not self.needs_input_grad[1]
-
-        if self.needs_input_grad[0]:
-            self.save_for_backward(index)
-            self.input_size = tensor.size()
-
-        return tensor.index_select(self.dim, index)
-
-    def backward(self, grad_output):
-        grad_tensor = None
-
-        if self.needs_input_grad[0]:
-            index, = self.saved_tensors
-            grad_tensor = grad_output.new(*self.input_size).zero_()
-            grad_tensor.index_copy_(self.dim, index, grad_output)
-
-        return grad_tensor, None
-
-
-class Concat(Function):
-
-    def __init__(self, dim):
-        super(Concat, self).__init__()
-        self.dim = dim
-
-    def forward(self, *inputs):
-        self.input_sizes = [i.size(self.dim) for i in inputs]
-        return torch.cat(inputs, self.dim)
-
-    def backward(self, grad_output):
-        return tuple(grad_output.narrow(self.dim, end-size, size) for size, end
-                in zip(self.input_sizes, _accumulate(self.input_sizes)))
-
-
+# TODO: deprecate this
 class Resize(Function):
 
-    def __init__(self, *sizes):
-        super(Resize, self).__init__()
-        self.sizes = sizes
-        self.numel = reduce(lambda x, y: x * y, sizes, 1)
-
-    def forward(self, tensor):
-        if tensor.numel() != self.numel:
+    @staticmethod
+    def forward(ctx, tensor, sizes):
+        ctx.sizes = sizes
+        ctx.numel = reduce(lambda x, y: x * y, sizes, 1)
+        if tensor.numel() != ctx.numel:
             raise RuntimeError(("requested resize to {} ({} elements in total), "
-                    "but the given tensor has a size of {} ({} elements). "
-                    "autograd's resize can only change the shape of a given "
-                    "tensor, while preserving the number of elements. ").format(
-                        'x'.join(map(str, self.sizes)), self.numel,
-                        'x'.join(map(str, tensor.size())), tensor.numel()))
-        self.input_sizes = tensor.size()
-        result = tensor.new(tensor).resize_(*self.sizes)
-        self.mark_shared_storage((tensor, result))
-        return result
-
-    def backward(self, grad_output):
-        assert grad_output.numel() == self.numel
-        return grad_output.new(grad_output).resize_(self.input_sizes)
-
-
-class Clone(Function):
-
-    def forward(self, input):
-        return input.clone()
-
-    def backward(self, grad_output):
-        return grad_output
-
-
-class Squeeze(Function):
-
-    def __init__(self, dim=None):
-        super(Squeeze, self).__init__()
-        self.dim = dim
-
-    def forward(self, input):
-        self.input_size = input.size()
-        self.numel = input.numel()
-        if self.dim is not None:
-            result = input.squeeze(self.dim)
+                                "but the given tensor has a size of {} ({} elements). "
+                                "autograd's resize can only change the shape of a given "
+                                "tensor, while preserving the number of elements. ").format(
+                'x'.join(map(str, sizes)), ctx.numel,
+                'x'.join(map(str, tensor.size())), tensor.numel()))
+        ctx.input_sizes = tensor.size()
+        if tensor.is_contiguous():
+            result = tensor.new(tensor).contiguous().view(*sizes)
+            ctx.mark_shared_storage((tensor, result))
+            return result
         else:
-            result = input.squeeze()
-        self.mark_shared_storage((input, result))
-        return result
+            return tensor.contiguous().view(*sizes)
 
-    def backward(self, grad_output):
-        assert grad_output.numel() == self.numel
-        return grad_output.contiguous().view(self.input_size)
-
-
-class Unsqueeze(Function):
-
-    def __init__(self, dim):
-        super(Unsqueeze, self).__init__()
-        self.dim = dim
-
-    def forward(self, input):
-        result = input.unsqueeze(self.dim)
-        self.mark_shared_storage((input, result))
-        return result
-
-    def backward(self, grad_output):
-        return grad_output.squeeze(self.dim)
+    @staticmethod
+    def backward(ctx, grad_output):
+        assert grad_output.numel() == ctx.numel
+        return grad_output.contiguous().view(ctx.input_sizes), None
 
 
-class MaskedCopy(InplaceFunction):
+class Repeat(Function):
 
-    def forward(self, tensor1, mask, tensor2):
-        assert not self.needs_input_grad[1], "MaskedCopy can't differentiate " \
-            "the mask"
-        if not self.inplace:
-            tensor1 = tensor1.clone()
+    @staticmethod
+    def forward(ctx, input, repeats):
+        ctx.repeats = repeats
+        ctx.input_dims = input.dim()
+        return input.repeat(repeats)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        grad_input = grad_output
+        num_unsqueezed = grad_output.dim() - ctx.input_dims
+        for _ in range(num_unsqueezed):
+            grad_input = grad_input.sum(0, keepdim=False)
+        for dim, repeat in enumerate(ctx.repeats[num_unsqueezed:]):
+            if repeat == 1:
+                continue
+            grad_input = sum(grad_input.chunk(repeat, dim))
+        return grad_input, None
+
+
+def sum_scan_exclusive(x, dim):
+    ret = torch.cumsum(-x, dim=dim)
+
+    end_idx = ret.size(dim) - 1
+    ret_sum = ret.narrow(dim, end_idx, 1).clone()
+    ret -= ret_sum.expand_as(ret)
+    ret += x
+    return ret
+
+
+class Prod(Function):
+
+    @staticmethod
+    def forward(ctx, input, dim=None, keepdim=None):
+        ctx.dim = dim
+        ctx.keepdim = False if keepdim is None else keepdim
+        ctx.input_size = input.size()
+        if dim is None:
+            ctx.result = input.prod()
+            ctx.save_for_backward(input)
+            return input.new((ctx.result,))
         else:
-            self.mark_dirty(tensor1)
-        self.save_for_backward(mask)
-        return tensor1.masked_copy_(mask, tensor2)
-
-    def backward(self, grad_output):
-        mask, = self.saved_tensors
-        grad_tensor1 = grad_tensor2 = None
-        if self.needs_input_grad[0]:
-            grad_tensor1 = grad_output.clone().masked_fill_(mask, 0)
-        if self.needs_input_grad[2]:
-            grad_tensor2 = grad_output.masked_select(mask)
-        return grad_tensor1, None, grad_tensor2
-
-
-class MaskedFill(InplaceFunction):
-
-    def __init__(self, value, inplace=False):
-        super(MaskedFill, self).__init__(inplace)
-        self.value = value
-
-    def forward(self, tensor, mask):
-        assert not self.needs_input_grad[1], "MaskedFill can't differentiate " \
-            "the mask"
-        if not self.inplace:
-            tensor = tensor.clone()
-        else:
-            self.mark_dirty(tensor)
-        self.save_for_backward(mask)
-        return tensor.masked_fill_(mask, self.value)
-
-    def backward(self, grad_output):
-        mask, = self.saved_tensors
-        grad_tensor = None
-        if self.needs_input_grad[0]:
-            grad_tensor = grad_output.clone().masked_fill_(mask, 0)
-        return grad_tensor, None
-
-
-class MaskedSelect(Function):
-
-    def forward(self, tensor, mask):
-        assert not self.needs_input_grad[1], "MaskedSelect can't differentiate " \
-            "the mask"
-        self.input_size = tensor.size()
-        self.save_for_backward(mask)
-        return tensor.masked_select(mask)
-
-    def backward(self, grad_output):
-        mask, = self.saved_tensors
-        grad_tensor = None
-        if self.needs_input_grad[0]:
-            # TODO: remove zero
-            grad_tensor = grad_output.new(self.input_size).zero_()
-            grad_tensor.masked_copy_(mask, grad_output)
-        return grad_tensor, None
-
-
-class _MultiSelectionFunction(Function):
-
-    def __init__(self, dim, return_indices):
-        super(_MultiSelectionFunction, self).__init__()
-        self.dim = dim
-        self.return_indices = return_indices
-
-    def forward(self, input):
-        fn = getattr(input, self.__class__.__name__.lower())
-        self.input_size = input.size()
-        output, indices = fn(*self.args)
-        if self.return_indices:
-            self.save_for_backward(indices)
-            self.mark_non_differentiable(indices)
-            return output, indices
-        else:
-            self.indices = indices
+            if keepdim is not None:
+                output = input.prod(dim, keepdim=keepdim)
+            else:
+                output = input.prod(dim)
+            ctx.save_for_backward(input, output)
             return output
 
-    def backward(self, grad_output, grad_indices=None):
-        grad_input = grad_output.new(self.input_size).zero_()
-        if self.return_indices:
-            indices, = self.saved_tensors
+    @staticmethod
+    def backward(ctx, grad_output):
+        def safe_zeros_backward(inp, dim):
+            # note that the gradient is equivalent to:
+            # cumprod(exclusive, normal) * cumprod(exclusive, reverse), e.g.:
+            # input:                        [    a,     b,     c]
+            # cumprod(exclusive, normal):   [1    ,     a, a * b]
+            # cumprod(exclusive, reverse):  [b * c,     c,     1]
+            # product:                      [b * c, a * c, a * b]
+            # and this is safe under input with 0s.
+            if inp.size(dim) == 1:
+                return grad_output
+
+            ones_size = torch.Size((inp.size()[:dim] + (1,) + inp.size()[dim + 1:]))
+            ones = Variable(grad_output.data.new(ones_size).fill_(1))
+            exclusive_normal_nocp = torch.cat((ones, inp.narrow(dim, 0, inp.size(dim) - 1)), dim)
+            exclusive_normal = exclusive_normal_nocp.cumprod(dim)
+
+            def reverse_dim(var, dim):
+                index = Variable(torch.arange(var.size(dim) - 1, -1, -1, out=var.data.new().long()))
+                return var.index_select(dim, index)
+
+            narrow_reverse = reverse_dim(inp.narrow(dim, 1, inp.size(dim) - 1), dim)
+            exclusive_reverse_nocp = torch.cat((ones, narrow_reverse), dim)
+            exclusive_reverse = reverse_dim(exclusive_reverse_nocp.cumprod(dim), dim)
+
+            grad_input = grad_output.expand_as(exclusive_normal).mul(exclusive_normal.mul(exclusive_reverse))
+            return grad_input
+
+        if ctx.dim is None:
+            input, = ctx.saved_variables
+            zero_idx = (input.data == 0).nonzero()
+            if zero_idx.dim() == 0:
+                return grad_output.mul(ctx.result).expand_as(input).div(input), None, None
+            elif zero_idx.size(0) > 1:
+                return (grad_output * 0).expand_as(input), None, None
+            else:
+                return safe_zeros_backward(input.contiguous().view(-1), 0).view_as(input), None, None
+
         else:
-            indices = self.indices
-        dim = self.dim if self.dim is not None else grad_output.dim() - 1
-        return grad_input.scatter_(dim, indices, grad_output)
+            input, output = ctx.saved_variables
+            dim = ctx.dim if ctx.dim >= 0 else ctx.dim + input.dim()
+            if ctx.keepdim is False and len(ctx.input_size) != 1:
+                grad_output = grad_output.unsqueeze(dim)
+                output = output.unsqueeze(dim)
+
+            zero_mask = input == 0
+            slice_zero_count = zero_mask.sum(dim, True)
+            total_zeros = slice_zero_count.data.sum()
+            if total_zeros == 0:
+                grad_input = grad_output.mul(output).expand_as(input).div(input)
+            else:
+                grad_input = safe_zeros_backward(input, dim)
+
+            return grad_input, None, None
 
 
-class Sort(_MultiSelectionFunction):
+class Cumsum(Function):
 
-    def __init__(self, dim=None, descending=False, return_indices=False):
-        super(Sort, self).__init__(dim, return_indices)
-        self.descending = descending
+    @staticmethod
+    def forward(ctx, input, dim):
+        ctx.dim = dim
+        return torch.cumsum(input, dim=ctx.dim)
 
-    def forward(self, input):
-        dim = self.dim if self.dim is not None else input.dim() - 1
-        self.args = (dim, self.descending)
-        return super(Sort, self).forward(input)
-
-
-class Topk(_MultiSelectionFunction):
-
-    def __init__(self, k, dim=None, largest=True, sort=True, return_indices=False):
-        super(Topk, self).__init__(dim, return_indices)
-        self.k = k
-        self.largest = largest
-        self.sort = sort
-
-    def forward(self, input):
-        dim = self.dim if self.dim is not None else input.dim()-1
-        self.args = (self.k, dim, self.largest, self.sort)
-        return super(Topk, self).forward(input)
+    @staticmethod
+    def backward(ctx, grad_output):
+        return sum_scan_exclusive(grad_output, dim=ctx.dim), None
 
 
-class Chunk(Function):
+class Cumprod(Function):
 
-    def __init__(self, num_chunks, dim=0):
-        super(Chunk, self).__init__()
-        self.num_chunks = num_chunks
-        self.dim = dim
+    @staticmethod
+    def forward(ctx, input, dim):
+        ctx.dim = dim
+        ctx.save_for_backward(input)
+        return torch.cumprod(input, dim=ctx.dim)
 
-    def forward(self, i):
-        self.input_size = i.size()
-        result = i.chunk(self.num_chunks, self.dim)
-        self.mark_shared_storage(*((i, chunk) for chunk in result))
-        return result
+    @staticmethod
+    def backward(ctx, grad_output):
+        '''
+        There are two algorithms to do this. The first one
+        is very efficient, but works only when there are no
+        nonzero elements in the input.
 
-    def backward(self, *grad_output):
-        grad_input = grad_output[0].new(self.input_size)
-        offset = 0
-        for grad in grad_output:
-            grad_size = grad.size(self.dim)
-            grad_input.narrow(self.dim, offset, grad_size).copy_(grad)
-            offset += grad_size
-        return grad_input
+        The second one is much more complex, but it doesn't
+        assume anything on the input. The main downside is
+        that it takes time O(n^2), where n = input.size(self.dim)
+        (i.e. the length of the cumulative product). This is in
+        contrast to the forward pass and the efficient algorithm,
+        which are both O(n).
 
+        The second algorithm is a simple application of the chain
+        rule. If x is an n-dimensional vector, and y = cumprod(x),
+        and F is the final cost, then
 
-class Gather(Function):
+        dF / dx_k = sum_j (dF / dy_j) * (dy_j / dx_k)   (1)
 
-    def __init__(self, dim):
-        super(Gather, self).__init__()
-        self.dim = dim
+        The term dF / dy_j is just grad_output[j] (assuming again
+        everything is one-dimensional).
 
-    def forward(self, input, index):
-        assert not self.needs_input_grad[1], "Gather can't differentiate " \
-            "the index"
-        self.input_size = input.size()
-        self.save_for_backward(index)
-        return input.gather(self.dim, index)
+        The term (dy_j / dx_k) is easilly seen to be
 
-    def backward(self, grad_output):
-        index, = self.saved_tensors
-        grad_input = grad_output.new(self.input_size).zero_()
-        return grad_input.scatter_(self.dim, index, grad_output), None
-
-
-class Scatter(InplaceFunction):
-
-    def __init__(self, dim, inplace=False):
-        super(Scatter, self).__init__(inplace)
-        self.dim = dim
-
-    def forward(self, input, index, source):
-        assert not self.needs_input_grad[1], "Scatter can't differentiate " \
-            "the index"
-        if self.inplace:
-            self.mark_dirty(input)
+        if j >= k
+            dy_j / dx_k = prod_{1 <= i <= j, i != k} x_i
         else:
-            input = input.clone()
-        self.save_for_backward(index)
-        return input.scatter_(self.dim, index, source)
+            dy_j / dx_k = 0
 
-    def backward(self, grad_output):
-        index, = self.saved_tensors
-        grad_input = grad_source = None
-        if self.needs_input_grad[0]:
-            grad_input = grad_output.clone()
-            grad_input.scatter_(self.dim, index, 0)
-        if self.needs_input_grad[2]:
-            grad_source = grad_output.gather(self.dim, index)
-        return grad_input, None, grad_source
+        Note that the indicator (j>=k) can be taken out
+        by replacing the sum in (1) with a sum from
+        j = k to n.
 
+        Thus,
+        df / dx_k = sum_{k <= j <= n} grad_output[j] * (dy_j / dx_k)
 
-# TODO: kthvalue
-# TODO: repeat
-# TODO: sort
-# TODO: split
-# TODO: topk
-# TODO: unfold
+        with
+        dy_j / dx_k = prod_{1 <= i <= j, i != k} x_i     (2)
+
+        Note that this last term is just the cumulative product
+        with k omitted. Thus, if x_k (the input) is nonzero, we can
+        just express this as
+
+        dy_j / dx_k = (prod_{1 <= i <= j} x_i) / x_k
+                    = y_j / x_k
+
+        So therefore,
+
+        df / dx_k = sum_{k <= j <= n} grad_output[j] * y_j / x_k
+
+        so
+
+        grad_output = sum_scan_exclusiv(grad_output * output) / input
+
+        If the input is nonzero, we need to calculate the dy_j / dx_k
+        by using the formula (2), called in the code omitted_products.
+
+        The way the code calculates it is simply by noting that
+
+        prod_{1 <= i <= j, i != k} x_i
+            = (prod_{1 <= i <= k} x_i) * (prod_{k + 1 <= i <= j} x_i)
+
+        the first term is calculated as prods_until_k, which since
+        doesn't depend in j is easy to vectorize.
+
+        The second term (indexed by j) is the cumulative product of
+        x_{k+1}, x_{k+2}, ..., x_n, and it's named in the code
+        prods_from_k_pkus_1, and it's calculated as a cumprod.
+
+        In order to vectorize this properly, we need to add to
+        omitted_products the dimensions where k > j, and therefore
+        dy_j / dx_k = 0, which is done right after the assert.
+        '''
+
+        input, = ctx.saved_variables
+        dim_size = input.size(ctx.dim)
+        if dim_size == 1:
+            return grad_output, None
+
+        #  Simple case with nonzero elements in the input
+        if (input != 0).data.all():
+            output = torch.cumprod(input, dim=ctx.dim)
+            return sum_scan_exclusive(output * grad_output, dim=ctx.dim) / input, None
+
+        positive_dim = ctx.dim if ctx.dim >= 0 else input.dim() + ctx.dim
+        dim_padding = (slice(None, None),) * (positive_dim)
+
+        ones_size = list(input.size())
+        ones_size[ctx.dim] = 1
+        ones = Variable(input.data.new([1]).expand(ones_size))
+        grad_input = Variable(grad_output.data.new(input.size()).zero_())
+        for k in range(dim_size):
+            if k == 0:
+                prods_from_k_plus_1 = torch.cumprod(
+                    input[dim_padding + (slice(k + 1, None),)],
+                    dim=ctx.dim
+                )
+
+                omitted_products = torch.cat(
+                    (ones, prods_from_k_plus_1),
+                    dim=ctx.dim
+                )
+
+            elif k == dim_size - 1:
+                prods_until_k = torch.prod(
+                    input[dim_padding + (slice(None, k),)],
+                    dim=ctx.dim,
+                    keepdim=True
+                )
+
+                omitted_products = prods_until_k
+
+            else:
+                prods_until_k = torch.prod(
+                    input[dim_padding + (slice(None, k),)],
+                    dim=ctx.dim,
+                    keepdim=True
+                )
+
+                prods_from_k_plus_1 = torch.cumprod(
+                    input[dim_padding + (slice(k + 1, None),)],
+                    dim=ctx.dim
+                )
+
+                omitted_products = prods_until_k.expand_as(
+                    prods_from_k_plus_1) * prods_from_k_plus_1
+
+                omitted_products = torch.cat(
+                    (prods_until_k, omitted_products), ctx.dim)
+
+            # At this point omitted_products is the same size
+            # as input, except on the dimension dim where it's
+            # dim_size - k
+            assert omitted_products.size(ctx.dim) == dim_size - k
+
+            # should we implement copy_ or _set_item in variable?
+            index = tuple(slice(None, None) for _ in range(positive_dim)) + (k,)
+            grad_input[index] = torch.sum(
+                grad_output[dim_padding + (slice(k, None),)] * omitted_products,
+                dim=ctx.dim)
+
+        return grad_input, None

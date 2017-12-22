@@ -4,17 +4,21 @@ import torch
 import torch.cuda.nccl as nccl
 import torch.cuda
 
-from common import TestCase
-
-if not torch.cuda.is_available():
-    print('CUDA not available, skipping tests')
-    import sys
-    sys.exit()
+from common import TestCase, run_tests, IS_WINDOWS
 
 nGPUs = torch.cuda.device_count()
+if nGPUs == 0:
+    print('CUDA not available, skipping tests')
+    TestCase = object  # noqa: F811
 
 
 class TestNCCL(TestCase):
+
+    @unittest.skipIf(IS_WINDOWS, "NCCL doesn't support Windows")
+    def test_unique_id(self):
+        uid = nccl.unique_id()
+        self.assertIsInstance(uid, bytes)
+        self.assertGreater(len(uid), 1)
 
     @unittest.skipIf(nGPUs < 2, "only one GPU detected")
     def test_broadcast(self):
@@ -87,4 +91,4 @@ class TestNCCL(TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main()
+    run_tests()
