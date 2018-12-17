@@ -1,10 +1,11 @@
-#include "python_arg_flatten.h"
+#include <torch/csrc/jit/python_arg_flatten.h>
 
-#include "torch/csrc/autograd/grad_mode.h"
+#include <torch/csrc/autograd/grad_mode.h>
 
 namespace torch { namespace jit { namespace python {
 
 using namespace torch::autograd;
+using namespace at;
 
 // Alphabet used to describe structure of inputs/outputs (D for desc)
 namespace D {
@@ -21,7 +22,7 @@ template<typename T>
 py::object cast_handle_sequence(std::vector<py::handle> objs) {
   auto num_objs = objs.size();
   T sequence { num_objs };
-  for (std::size_t i = 0; i < num_objs; ++i)
+  for (size_t i = 0; i < num_objs; ++i)
     sequence[i] = py::reinterpret_borrow<py::object>(objs[i]);
   return sequence;
 }
@@ -65,13 +66,13 @@ template<typename T>
 py::object cast_sequence(std::vector<py::object> objs) {
   auto num_objs = objs.size();
   T sequence { num_objs };
-  for (std::size_t i = 0; i < num_objs; ++i)
+  for (size_t i = 0; i < num_objs; ++i)
     sequence[i] = std::move(objs[i]);
   return sequence;
 }
 
-py::object unflatten_rec(variable_list::iterator& var_it,
-                         variable_list::iterator& var_it_end,
+py::object unflatten_rec(ArrayRef<Variable>::iterator& var_it,
+                         ArrayRef<Variable>::iterator& var_it_end,
                          std::string::const_iterator& desc_it) {
   char type = *desc_it++;
   if (type == D::TupleOpen) {
@@ -96,7 +97,7 @@ py::object unflatten_rec(variable_list::iterator& var_it,
 
 } // anonymous namespace
 
-PyObject* unflatten(variable_list&& vars, const IODescriptor& desc) {
+PyObject* unflatten(ArrayRef<Variable> vars, const IODescriptor& desc) {
   // NB: We don't do correctness checking on descriptor.
   // It has to be a correct bytes object produced by unflatten.
   auto vars_it = vars.begin();

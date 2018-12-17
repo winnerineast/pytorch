@@ -3,13 +3,7 @@
 
 #include <THD/THD.h>
 
-#include "torch/csrc/THP.h"
-#include "Module.h"
-#include "Storage.h"
-#include "Tensor.h"
-#include "../PtrWrapper.h"
-#ifdef _THP_CORE
-#include "utils.h"
-#endif
+#include <torch/csrc/THP.h>
+#include <torch/csrc/Module.h>
 
 #endif

@@ -1,50 +1,50 @@
-#include "ATen/ATen.h"
-#include "ATen/UndefinedTensor.h"
+#include <gtest/gtest.h>
+
+#include <ATen/ATen.h>
+#include <c10/core/UndefinedTensorImpl.h>
 #include <string>
-#include "test_assert.h"
 
 using namespace at;
 
-int main() {
+TEST(TestUndefined, UndefinedTest) {
+  manual_seed(123);
+
   // mainly test ops on undefined tensors don't segfault and give a reasonable errror message.
   Tensor und;
-  Tensor ft = CPU(kFloat).ones({1});
+  Tensor ft = ones({1}, CPU(kFloat));
 
-  std::cout << und << std::endl;
-  ASSERT(!und.defined());
-  ASSERT(std::string("UndefinedTensor") == und.toString());
+  std::stringstream ss;
+  ss << und << std::endl;
+  ASSERT_FALSE(und.defined());
+  ASSERT_EQ(std::string("UndefinedType"), und.toString());
 
-  ASSERT_THROWS(und.strides(), "strides");
-  ASSERT_THROWS(und.dim(), "dim");
-  ASSERT_THROWS(und.assign_(Scalar(5)), "assign");
-  ASSERT_THROWS(und.unsafeGetTH(true), "unsafeGetTH");
-  ASSERT_THROWS(und.add(und), "add");
-  ASSERT_THROWS(und.add(ft), "add");
-  ASSERT_THROWS(ft.add(und), "add");
-  ASSERT_THROWS(und.add(5), "add");
-  ASSERT_THROWS(und.mm(und), "mm");
+  ASSERT_ANY_THROW(und.strides());
+  ASSERT_ANY_THROW(und.dim());
+  ASSERT_ANY_THROW([]() { return Tensor(); }() = Scalar(5));
+  ASSERT_ANY_THROW(und.add(und));
+  ASSERT_ANY_THROW(und.add(ft));
+  ASSERT_ANY_THROW(ft.add(und));
+  ASSERT_ANY_THROW(und.add(5));
+  ASSERT_ANY_THROW(und.mm(und));
 
   und.toType(und.type());
-  ASSERT_THROWS(und.toType(ft.type()), "attempt to copy an undefined tensor");
-  ASSERT_THROWS(ft.toType(und.type()), "UndefinedType");
+  ASSERT_ANY_THROW(und.toType(ft.type()));
+  ASSERT_ANY_THROW(ft.toType(und.type()));
   und.toType(ScalarType::Undefined);
-  ASSERT_THROWS(und.toType(ScalarType::Float), "toScalarType");
-  ASSERT_THROWS(ft.toType(ScalarType::Undefined), "UndefinedType");
+  ASSERT_ANY_THROW(und.toType(ScalarType::Float));
+  ASSERT_ANY_THROW(ft.toType(ScalarType::Undefined));
 
   // copy_
-  ASSERT_THROWS(und.copy_(und), "copy");
-  ASSERT_THROWS(und.copy_(ft), "copy");
-  ASSERT_THROWS(ft.copy_(und), "copy");
+  ASSERT_ANY_THROW(und.copy_(und));
+  ASSERT_ANY_THROW(und.copy_(ft));
+  ASSERT_ANY_THROW(ft.copy_(und));
 
   und.toBackend(Backend::Undefined);
-  ASSERT_THROWS(und.toBackend(Backend::CPU), "toBackend");
-  ASSERT_THROWS(ft.toBackend(Backend::Undefined), "UndefinedType");
+  ASSERT_ANY_THROW(und.toBackend(Backend::CPU));
+  ASSERT_ANY_THROW(ft.toBackend(Backend::Undefined));
 
-  Tensor to_move = CPU(kFloat).ones({1});
+  Tensor to_move = ones({1}, CPU(kFloat));
   Tensor m(std::move(to_move));
-  ASSERT(!to_move.defined());
-  ASSERT(to_move.get() == UndefinedTensor::singleton());
-
-  return 0;
+  ASSERT_FALSE(to_move.defined());
+  ASSERT_EQ(to_move.unsafeGetTensorImpl(), UndefinedTensorImpl::singleton());
 }
-

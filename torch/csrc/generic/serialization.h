@@ -1,8 +1,11 @@
 #ifndef TH_GENERIC_FILE
-#define TH_GENERIC_FILE "generic/serialization.h"
+#define TH_GENERIC_FILE "torch/csrc/generic/serialization.h"
 #else
 
-void THPStorage_(writeFileRaw)(THStorage *self, int fd);
-THStorage * THPStorage_(readFileRaw)(int fd, THStorage *storage);
+template <class io>
+void THPStorage_(writeFileRaw)(THWStorage *self, io fd);
+
+template <class io>
+THWStorage * THPStorage_(readFileRaw)(io fd, THWStorage *storage);
 
 #endif

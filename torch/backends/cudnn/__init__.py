@@ -2,6 +2,7 @@ import os
 import ctypes
 import sys
 import torch
+import types
 import warnings
 from torch.version import cuda
 from contextlib import contextmanager
@@ -18,8 +19,15 @@ __cudnn_version = None
 # TODO: dynamic version checks via cudnnGetVersion
 
 
+# The idea for this parameter is that we forbid bare assignment
+# to torch.backends.cudnn.enabled and friends when running our
+# test suite, where it's very easy to forget to undo the change
+# later.
+__allow_nonbracketed_mutation_flag = True
+
+
 def find_cudnn_windows_lib():
-    proc = Popen(['where', 'cudnn64*.dll'], stdout=PIPE, stderr=PIPE)
+    proc = Popen(['where', 'cudnn64*.dll'], stdout=PIPE, stderr=PIPE, stdin=PIPE)
     out, err = proc.communicate()
     out = out.decode().strip()
     if len(out) > 0:
@@ -44,10 +52,22 @@ def _libcudnn():
             lib.cudnnGetErrorString.restype = ctypes.c_char_p
             __cudnn_version = lib.cudnnGetVersion()
             compile_version = torch._C._cudnn_version()
-            # Check that cuDNN major and minor versions match
-            if (__cudnn_version // 100) != (compile_version // 100):
+            # cuDNN version is MAJOR*1000 + MINOR*100 + PATCH
+            runtime_major = __cudnn_version // 1000
+            runtime_minor = (__cudnn_version % 1000) // 100
+            compile_major = compile_version // 1000
+            compile_minor = (compile_version % 1000) // 100
+            # Different major versions are always incompatible
+            # Starting with cuDNN 7, minor versions are backwards-compatible
+            if runtime_major != compile_major:
+                cudnn_compatible = False
+            elif runtime_major < 7:
+                cudnn_compatible = runtime_minor == compile_minor
+            else:
+                cudnn_compatible = runtime_minor >= compile_minor
+            if not cudnn_compatible:
                 raise RuntimeError(
-                    'cuDNN version mismatch: PyTorch was compiled against {} '
+                    'cuDNN version incompatibility: PyTorch was compiled against {} '
                     'but linked against {}'.format(compile_version, __cudnn_version))
         else:
             lib = None
@@ -60,14 +80,24 @@ def version():
     return __cudnn_version
 
 
+CUDNN_TENSOR_TYPES = {
+    'torch.cuda.HalfTensor',
+    'torch.cuda.FloatTensor',
+    'torch.cuda.DoubleTensor',
+}
+
+
+def is_available():
+    r"""Returns a bool indicating if CUDNN is currently available."""
+    return torch._C.has_cudnn
+
+
 def is_acceptable(tensor):
     if not torch._C._get_cudnn_enabled():
         return False
-    if not (isinstance(tensor, torch.cuda.HalfTensor) or
-            isinstance(tensor, torch.cuda.FloatTensor) or
-            isinstance(tensor, torch.cuda.DoubleTensor)):
+    if tensor.type() not in CUDNN_TENSOR_TYPES:
         return False
-    if not torch._C.has_cudnn:
+    if not is_available():
         warnings.warn(
             "PyTorch was compiled without cuDNN support. To use cuDNN, rebuild "
             "PyTorch making sure the library is visible to the build system.")
@@ -122,14 +152,36 @@ def set_flags(_enabled, _benchmark, _deterministic, _verbose):
     return orig_flags
 
 
+def disable_global_flags():
+    global __allow_nonbracketed_mutation_flag
+    __allow_nonbracketed_mutation_flag = False
+
+
+def flags_frozen():
+    return not __allow_nonbracketed_mutation_flag
+
+
+@contextmanager
+def __allow_nonbracketed_mutation():
+    global __allow_nonbracketed_mutation_flag
+    old = __allow_nonbracketed_mutation_flag
+    __allow_nonbracketed_mutation_flag = True
+    try:
+        yield
+    finally:
+        __allow_nonbracketed_mutation_flag = old
+
+
 @contextmanager
 def flags(enabled=False, benchmark=False, deterministic=False, verbose=False):
-    orig_flags = set_flags(enabled, benchmark, deterministic, verbose)
+    with __allow_nonbracketed_mutation():
+        orig_flags = set_flags(enabled, benchmark, deterministic, verbose)
     try:
         yield
     finally:
         # recover the previous values
-        set_flags(orig_flags[0], orig_flags[1], orig_flags[2], orig_flags[3])
+        with __allow_nonbracketed_mutation():
+            set_flags(orig_flags[0], orig_flags[1], orig_flags[2], orig_flags[3])
 
 
 class CuDNNHandle:
@@ -397,20 +449,25 @@ class ContextProp(object):
         return self.getter()
 
     def __set__(self, obj, val):
-        self.setter(val)
+        if not flags_frozen():
+            self.setter(val)
+        else:
+            raise RuntimeError("not allowed to set torch.backends.cudnn flags "
+                               "after disable_global_flags; please use flags() context manager instead")
 
 
-class CudnnModule(object):
-    def __init__(self, m):
-        self.__dict__ = m.__dict__
-        # You have to retain the old module, otherwise it will
-        # get GC'ed and a lot of things will break.  See:
-        # https://stackoverflow.com/questions/47540722/how-do-i-use-the-sys-modules-replacement-trick-in-init-py-on-python-2
-        self.__old_mod = m
+class CudnnModule(types.ModuleType):
+    def __init__(self, m, name):
+        super(CudnnModule, self).__init__(name)
+        self.m = m
+
+    def __getattr__(self, attr):
+        return self.m.__getattribute__(attr)
+
     enabled = ContextProp(torch._C._get_cudnn_enabled, torch._C._set_cudnn_enabled)
     deterministic = ContextProp(torch._C._get_cudnn_deterministic, torch._C._set_cudnn_deterministic)
     benchmark = ContextProp(torch._C._get_cudnn_benchmark, torch._C._set_cudnn_benchmark)
 
 # This is the sys.modules replacement trick, see
 # https://stackoverflow.com/questions/2447353/getattr-on-a-module/7668273#7668273
-sys.modules[__name__] = CudnnModule(sys.modules[__name__])
+sys.modules[__name__] = CudnnModule(sys.modules[__name__], __name__)

@@ -1,12 +1,13 @@
+#include <gtest/gtest.h>
+
 #include <iostream>
 // define constants like M_PI and C keywords for MSVC
 #ifdef _MSC_VER
 #define _USE_MATH_DEFINES
 #include <math.h>
 #endif
-#include "ATen/ATen.h"
-#include "ATen/Dispatch.h"
-#include "test_assert.h"
+#include <ATen/ATen.h>
+#include <ATen/Dispatch.h>
 
 using std::cout;
 using namespace at;
@@ -17,7 +18,8 @@ template<typename scalar_type>
 struct Foo {
   static void apply(Tensor a, Tensor b) {
     scalar_type s = 1;
-    cout << "hello, dispatch: " << a.type().toString() << s << "\n";
+    std::stringstream ss;
+    ss << "hello, dispatch: " << a.type().toString() << s << "\n";
     auto data = (scalar_type*)a.data_ptr();
     (void)data;
   }
@@ -27,131 +29,95 @@ struct Foo<Half> {
   static void apply(Tensor a, Tensor b) {}
 };
 
-void test_ctors() {
-  // create scalars backed by tensors
-  auto s1 = Scalar(CPU(kFloat).scalarTensor(1));
-  auto s2 = Scalar(CPU(kFloat).scalarTensor(2));
-  Scalar{s1};
-  Scalar{std::move(s2)};
-  ASSERT(s2.isBackedByTensor() && !s2.toTensor().defined());
-  s2 = s1;
-  ASSERT(s2.isBackedByTensor() && s2.toFloat() == 1.0);
-  Scalar s3;
-  s3 = std::move(s2);
-  ASSERT(s2.isBackedByTensor() && !s2.toTensor().defined());
-  ASSERT(s3.isBackedByTensor() && s3.toFloat() == 1.0);
-}
-
 void test_overflow() {
   auto s1 = Scalar(M_PI);
-  ASSERT(s1.toFloat() == static_cast<float>(M_PI));
+  ASSERT_EQ(s1.toFloat(), static_cast<float>(M_PI));
   s1.toHalf();
 
   s1 = Scalar(100000);
-  ASSERT(s1.toFloat() == 100000.0);
-  ASSERT(s1.toInt() == 100000);
+  ASSERT_EQ(s1.toFloat(), 100000.0);
+  ASSERT_EQ(s1.toInt(), 100000);
 
-  bool threw = false;
-  try {
-    s1.toHalf();
-  } catch (std::domain_error& e) {
-    threw = true;
-  }
-  ASSERT(threw);
+  ASSERT_THROW(s1.toHalf(), std::domain_error);
 
   s1 = Scalar(NAN);
-  ASSERT(std::isnan(s1.toFloat()));
-  threw = false;
-  try {
-    s1.toInt();
-  } catch (std::domain_error& e) {
-    threw = true;
-  }
-  ASSERT(threw);
+  ASSERT_TRUE(std::isnan(s1.toFloat()));
+  ASSERT_THROW(s1.toInt(), std::domain_error);
 
   s1 = Scalar(INFINITY);
-  ASSERT(std::isinf(s1.toFloat()));
-  threw = false;
-  try {
-    s1.toInt();
-  } catch (std::domain_error& e) {
-    threw = true;
-  }
-  ASSERT(threw);
+  ASSERT_TRUE(std::isinf(s1.toFloat()));
+  ASSERT_THROW(s1.toInt(), std::domain_error);
 }
 
-int main() {
+TEST(TestScalar, TestScalar) {
+  manual_seed(123);
+
   Scalar what = 257;
   Scalar bar = 3.0;
   Half h = bar.toHalf();
   Scalar h2 = h;
-  cout << "H2: " << h2.toDouble() << " " << what.toFloat() << " " << bar.toDouble() << " " << what.isIntegral() <<  "\n";
-  Generator & gen = at::globalContext().defaultGenerator(Backend::CPU);
-  cout << gen.seed() << "\n";
-  auto && C = at::globalContext();
-  if(at::hasCUDA()) {
-    auto & CUDAFloat = C.getType(Backend::CPU,ScalarType::Float);
-    auto t2 = CUDAFloat.zeros({4,4});
+  cout << "H2: " << h2.toDouble() << " " << what.toFloat() << " "
+       << bar.toDouble() << " " << what.isIntegral() << "\n";
+  Generator& gen = at::globalContext().defaultGenerator(at::kCPU);
+  ASSERT_NO_THROW(gen.seed());
+  auto&& C = at::globalContext();
+  if (at::hasCUDA()) {
+    auto t2 = zeros({4, 4}, at::kCUDA);
     cout << &t2 << "\n";
-    cout << "AFTER GET TYPE " << &CUDAFloat << "\n";
-    cout << "STORAGE: " << CUDAFloat.storage(4).get() << "\n";
-    auto s = CUDAFloat.storage(4);
-    s->fill(7);
-    cout << "GET " << s->get(3).toFloat() << "\n";
   }
-  auto t = CPU(Float).ones({4,4});
+  auto t = ones({4, 4});
 
-  auto wha2 = CPU(Float).zeros({4,4}).add(t).sum();
-  cout << wha2.toCDouble() << " <-ndim\n";
+  auto wha2 = zeros({4, 4}).add(t).sum();
+  ASSERT_EQ(wha2.item<double>(), 16.0);
 
-  cout << t.sizes() << " " << t.strides() << "\n";
+  ASSERT_EQ(t.sizes()[0], 4);
+  ASSERT_EQ(t.sizes()[1], 4);
+  ASSERT_EQ(t.strides()[0], 4);
+  ASSERT_EQ(t.strides()[1], 1);
 
-  Type & T = CPU(Float);
-  Tensor x = T.randn({1,10});
-  Tensor prev_h = T.randn({1,20});
-  Tensor W_h = T.randn({20,20});
-  Tensor W_x = T.randn({20,10});
+  TensorOptions options = dtype(kFloat);
+  Tensor x = randn({1, 10}, options);
+  Tensor prev_h = randn({1, 20}, options);
+  Tensor W_h = randn({20, 20}, options);
+  Tensor W_x = randn({20, 10}, options);
   Tensor i2h = at::mm(W_x, x.t());
   Tensor h2h = at::mm(W_h, prev_h.t());
   Tensor next_h = i2h.add(h2h);
   next_h = next_h.tanh();
 
-  bool threw = false;
-  try {
-    Scalar{Tensor{}};
-  } catch (std::runtime_error& e) {
-    threw = true;
-  }
-  ASSERT(threw);
+  ASSERT_ANY_THROW(Tensor{}.item());
 
-  test_ctors();
   test_overflow();
 
-  if(at::hasCUDA()) {
+  if (at::hasCUDA()) {
     auto r = CUDA(Float).copy(next_h);
-
-    cout << r << "\n";
+    ASSERT_TRUE(CPU(Float).copy(r).equal(next_h));
   }
-  cout << T.randn({10,10,2}) << "\n";
+  ASSERT_NO_THROW(randn({10, 10, 2}, options));
 
   // check Scalar.toTensor on Scalars backed by different data types
-  ASSERT(bar.toTensor().type().scalarType() == kDouble);
-  ASSERT(what.toTensor().type().scalarType() == kLong);
-  ASSERT(Scalar(CPU(kFloat).ones({})).toTensor().type().scalarType() == kFloat);
+  ASSERT_EQ(scalar_to_tensor(bar).scalar_type(), kDouble);
+  ASSERT_EQ(scalar_to_tensor(what).scalar_type(), kLong);
+  ASSERT_EQ(scalar_to_tensor(ones({}).item()).scalar_type(), kDouble);
 
-  dispatch_all<Foo>(x.type(),"foo",x,prev_h);
+  if (x.scalar_type() != ScalarType::Half) {
+    AT_DISPATCH_ALL_TYPES(x.type(), "foo", [&] {
+      scalar_t s = 1;
+      std::stringstream ss;
+      ASSERT_NO_THROW(
+          ss << "hello, dispatch" << x.type().toString() << s << "\n");
+      auto data = (scalar_t*)x.data_ptr();
+      (void)data;
+    });
+  }
 
   // test direct C-scalar type conversions
-  try {
-    auto x = T.ones({1,2});
-    x.toCFloat();
-    ASSERT(false);
-  } catch (std::runtime_error &e) {}
-  auto float_one = T.ones({});
-  ASSERT(float_one.toCFloat() == 1);
-  ASSERT(float_one.toCInt() == 1);
-  ASSERT(float_one.toCHalf() == 1);
-
-  return 0;
-
+  {
+    auto x = ones({1, 2}, options);
+    ASSERT_ANY_THROW(x.item<float>());
+  }
+  auto float_one = ones({}, options);
+  ASSERT_EQ(float_one.item<float>(), 1);
+  ASSERT_EQ(float_one.item<int32_t>(), 1);
+  ASSERT_EQ(float_one.item<at::Half>(), 1);
 }

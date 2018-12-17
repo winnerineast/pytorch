@@ -1,10 +1,10 @@
-#include "THCUNN.h"
-#include "common.h"
-#include "THCHalf.h"
-#include "THCHalfAutoNumerics.cuh"
-#include "THCDeviceTensor.cuh"
-#include "THCDeviceTensorUtils.cuh"
-#include "THCDeviceUtils.cuh"
+#include <THCUNN/THCUNN.h>
+#include <THCUNN/common.h>
+#include <TH/THHalf.h>
+#include <THCUNN/THCHalfAutoNumerics.cuh>
+#include <THC/THCDeviceTensor.cuh>
+#include <THC/THCDeviceTensorUtils.cuh>
+#include <THC/THCDeviceUtils.cuh>
 
 #include <stdio.h>
 #include <assert.h>
@@ -44,6 +44,7 @@ __global__ void ClassNLLCriterion_updateOutput_no_reduce_kernel(
     THCDeviceTensor<THCIndex_t, 1> target,
     THCDeviceTensor<Dtype, 1> output,
     Dtype *weights,
+    int n_classes,
     int ignore_index) {
 
   CUDA_KERNEL_LOOP(index, batch_size) {
@@ -52,6 +53,7 @@ __global__ void ClassNLLCriterion_updateOutput_no_reduce_kernel(
       output[index] = ScalarConvert<int, Dtype>::to(0);
       continue;
     }
+    assert(cur_target  >= 0 && cur_target  < n_classes);
     Dtype weight =
        weights ? weights[cur_target] : ScalarConvert<int, Dtype>::to(1);
     output[index] = -weight * input[index][cur_target];
@@ -65,6 +67,7 @@ __global__ void ClassNLLCriterion_updateGradInput_no_reduce_kernel(
     THCDeviceTensor<Dtype, 1> gradOutput,
     THCDeviceTensor<Dtype, 2> gradInput,
     Dtype *weights,
+    int n_classes,
     int ignore_index) {
 
   CUDA_KERNEL_LOOP(index, batch_size) {
@@ -72,6 +75,7 @@ __global__ void ClassNLLCriterion_updateGradInput_no_reduce_kernel(
     if (cur_target == ignore_index) {
       continue;
     }
+    assert(cur_target  >= 0 && cur_target  < n_classes);
     Dtype weight =
        weights ? weights[cur_target] : ScalarConvert<int, Dtype>::to(1);
     gradInput[index][cur_target] = -weight * gradOutput[index];
@@ -177,5 +181,5 @@ __global__ void cunn_ClassNLLCriterion_updateGradInput_kernel(
   }
 }
 
-#include "generic/ClassNLLCriterion.cu"
-#include "THCGenerateFloatTypes.h"
+#include <THCUNN/generic/ClassNLLCriterion.cu>
+#include <THC/THCGenerateFloatTypes.h>

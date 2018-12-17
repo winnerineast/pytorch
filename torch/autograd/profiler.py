@@ -1,11 +1,12 @@
-import torch
 import subprocess
+import re
 import os
 import sys
-import copy
-import tempfile
 import itertools
-from collections import defaultdict, namedtuple
+from collections import defaultdict
+
+import torch
+from torch._six import FileNotFoundError
 
 
 class range(object):
@@ -141,7 +142,7 @@ class profile(object):
         instance should be enabled at any given time.
 
     Example:
-        >>> x = Variable(torch.randn(1, 1), requires_grad=True)
+        >>> x = torch.randn((1, 1), requires_grad=True)
         >>> with torch.autograd.profiler.profile() as prof:
         ...     y = x ** 2
         ...     y.backward()
@@ -196,27 +197,27 @@ class profile(object):
             return '<unfinished torch.autograd.profile>'
         return str(self.function_events)
 
-    def table(self, sort_by=None):
+    def _check_finish(self):
         if self.function_events is None:
             raise RuntimeError("can't export a trace that didn't finish running")
+
+    def table(self, sort_by=None):
+        self._check_finish()
         return self.function_events.table(sort_by)
     table.__doc__ = EventList.table.__doc__
 
     def export_chrome_trace(self, path):
-        if self.function_events is None:
-            raise RuntimeError("can't export a trace that didn't finish running")
+        self._check_finish()
         return self.function_events.export_chrome_trace(path)
     export_chrome_trace.__doc__ = EventList.export_chrome_trace.__doc__
 
     def key_averages(self):
-        if self.function_events is None:
-            raise RuntimeError("can't average a trace that didn't finish running")
+        self._check_finish()
         return self.function_events.key_averages()
     key_averages.__doc__ = EventList.key_averages.__doc__
 
     def total_average(self):
-        if self.function_events is None:
-            raise RuntimeError("can't average a trace that didn't finish running")
+        self._check_finish()
         return self.function_events.total_average()
     total_average.__doc__ = EventList.total_average.__doc__
 
@@ -248,6 +249,51 @@ class emit_nvtx(object):
         ...     model(x) # Warmup CUDA memory allocator and profiler
         ...     with torch.autograd.profiler.emit_nvtx():
         ...         model(x)
+
+    **Forward-backward correlation**
+
+    When viewing a profile created using :class:`emit_nvtx` in the Nvidia Visual Profiler,
+    correlating each backward-pass op with the corresponding forward-pass op can be difficult.
+    To ease this task, :class:`emit_nvtx` appends sequence number information to the ranges it
+    generates.
+
+    During the forward pass, each function range is decorated with ``seq=<N>``.  ``seq`` is a running
+    counter, incremented each time a new backward Function object is created and stashed for backward.
+    Thus, the `seq=<N>` annotation associated with each forward function range tells you that
+    if a backward Function object is created by this forward function,
+    the backward object will receive sequence number N.
+    During the backward pass, the top-level range wrapping each C++ backward Function's
+    ``apply()`` call is decorated with ``stashed seq=<M>``.  ``M`` is the sequence number that
+    the backward object was created with.  By comparing ``stashed seq`` numbers in backward with ``seq``
+    numbers in forward, you can track down which forward op created each backward Function.
+
+    Any functions executed during the backward pass are also decorated with ``seq=<N>``.  During
+    default backward (with ``create_graph=False``) this information is irrelevant, and in fact,
+    ``N`` may simply be 0 for all such functions.  Only the top-level ranges associated with
+    backward Function objects' ``apply()`` methods are useful, as a way to correlate these Function
+    objects with the earlier forward pass.
+
+    **Double-backward**
+
+    If, on the other hand, a backward pass with ``create_graph=True`` is underway (in other words,
+    if you are setting up for a double-backward), each function's execution during backward
+    is given a nonzero, useful ``seq=<N>``.  Those functions may themselves create Function objects
+    to be executed later during double-backward, just as the original functions in the forward pass did.
+    The relationship between backward and double-backward is conceptually the same as the relationship
+    between forward and backward: The functions still emit current-sequence-number-tagged ranges,
+    the Function objects they create still stash those sequence numbers, and during the eventual
+    double-backward, the Function objects' ``apply()`` ranges are still tagged with ``stashed seq``
+    numbers, which can be compared to `seq` numbers from the backward pass.
+
+    .. warning:
+        The sequence number is thread-local, and some forward functions don't create an associated
+        backward Function object (instead delegating that to sub-functions further down the call chain).
+        For these reasons, the correspondence of stashed sequence numbers in
+        backward Function ``apply()`` ranges with `seq` numbers in forward-pass ranges is
+        not guaranteed to be 1 to 1.  The sequence numbers alone may not be enough to fully
+        disambiguate which forward function created which
+        backward Function object.  You may need to make a judgment based on analytic knowledge of what
+        the expected correspondence should be.
     """
     def __init__(self, enabled=True):
         self.enabled = enabled
@@ -382,18 +428,9 @@ class FunctionEventAvg(FormattedTimesMixin):
 ################################################################################
 # Utilities
 
-def demangle(name):
-    """Demangle a C++ identifier using c++filt"""
-    try:
-        with open(os.devnull, 'w') as devnull:
-            return subprocess.check_output(['c++filt', '-n', name], stderr=devnull).rstrip().decode("ascii")
-    except subprocess.CalledProcessError:
-        return name
-
-
 class StringTable(defaultdict):
     def __missing__(self, key):
-        self[key] = demangle(key)
+        self[key] = torch._C._demangle(key)
         return self[key]
 
 
@@ -476,7 +513,7 @@ def parse_nvprof_trace(path):
     # Parse strings table
     strings = {}
     for r in conn.execute("SELECT _id_ as id, value FROM StringTable"):
-        strings[r["id"]] = demangle(r["value"])
+        strings[r["id"]] = torch._C._demangle(r["value"])
 
     # First, find all functions and create FunctionEvents for them
     marker_query = """
@@ -526,7 +563,7 @@ def parse_nvprof_trace(path):
                           row['kernel_start'],
                           row['kernel_end'])
 
-    functions.sort(key=lambda evt: evt.start)
+    functions.sort(key=lambda evt: evt.cpu_interval.start)
     return functions
 
 
@@ -538,7 +575,10 @@ def build_table(events, sort_by=None, header=None):
     if sort_by is not None:
         events = sorted(events, key=lambda evt: getattr(evt, sort_by))
 
-    max_name_length = max(len(evt.key) for evt in events)
+    name_lengths = [len(evt.key) for evt in events]
+    if len(name_lengths) == 0:
+        return ""
+    max_name_length = max(name_lengths)
     max_name_length += 4  # Add some nice padding
     col_width = 15
     col_format = '  {: >' + str(col_width) + '}'
@@ -546,11 +586,11 @@ def build_table(events, sort_by=None, header=None):
     header_sep = '-' * max_name_length + ('  ' + '-' * col_width) * 5
 
     # Have to use a list because nonlocal is Py3 only...
-    result = ['']
+    result = []
 
     def append(s):
-        result[0] += s
-        result[0] += '\n'
+        result.append(s)
+        result.append('\n')  # Yes, newline after the end as well
 
     # Actual printing
     if header is not None:
@@ -564,4 +604,4 @@ def build_table(events, sort_by=None, header=None):
         append(row_format.format(evt.key, evt.cpu_time_str, evt.cuda_time_str,
                                  evt.count, evt.cpu_time_total_str, evt.cuda_time_total_str))
 
-    return result[0]
+    return ''.join(result)

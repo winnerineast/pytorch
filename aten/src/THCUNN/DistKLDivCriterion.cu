@@ -1,7 +1,8 @@
-#include "THCUNN.h"
-#include "common.h"
-#include "THCHalf.h"
-#include "THCHalfAutoNumerics.cuh"
+#include <THCUNN/THCUNN.h>
+#include <THCUNN/common.h>
+#include <TH/THHalf.h>
+#include <THCUNN/THCHalfAutoNumerics.cuh>
+#include <THC/THCApply.cuh>
 
 #include <thrust/fill.h>
 #include <thrust/functional.h>
@@ -55,9 +56,9 @@ struct kl_updateGradInput_functor
 
   __host__ __device__ Dtype operator()(const Dtype& x, const Dtype& y) const
   {
-      return y > 0 ? norm * (-y) : ScalarConvert<int, Dtype>::to(0) * gradOutput;
+      return y > 0 ? norm * (-y) * gradOutput : ScalarConvert<int, Dtype>::to(0);
   }
 };
 
-#include "generic/DistKLDivCriterion.cu"
-#include "THCGenerateFloatTypes.h"
+#include <THCUNN/generic/DistKLDivCriterion.cu>
+#include <THC/THCGenerateFloatTypes.h>

@@ -1,11 +1,11 @@
-#include "THCUNN.h"
-#include "THCHalf.h"
-#include "THCHalfAutoNumerics.cuh"
-#include "THCAtomics.cuh"
-#include "common.h"
-#include "THCDeviceTensor.cuh"
-#include "THCDeviceTensorUtils.cuh"
-#include "THCDeviceUtils.cuh"
+#include <THCUNN/THCUNN.h>
+#include <TH/THHalf.h>
+#include <THCUNN/THCHalfAutoNumerics.cuh>
+#include <THC/THCAtomics.cuh>
+#include <THCUNN/common.h>
+#include <THC/THCDeviceTensor.cuh>
+#include <THC/THCDeviceTensorUtils.cuh>
+#include <THC/THCDeviceUtils.cuh>
 #include <THC/THCApply.cuh>
 
 #include <thrust/functional.h>
@@ -103,9 +103,8 @@ __global__ void cunn_SpatialClassNLLCriterion_updateOutput_kernel(
     }
   }
 
-  __syncthreads();
-
   input_sum = reduceBlock(partial_sums, blockDim.x, input_sum, thrust::plus<AccumT>(), AccumT(0));
+  __syncthreads();
   acc_weight = reduceBlock(partial_sums, blockDim.x, acc_weight, thrust::plus<AccumT>(), AccumT(0));
 
   if (threadIdx.x == 0) {
@@ -158,5 +157,5 @@ __global__ void cunn_SpatialClassNLLCriterion_updateGradInput_kernel(
   }
 }
 
-#include "generic/SpatialClassNLLCriterion.cu"
-#include "THCGenerateFloatTypes.h"
+#include <THCUNN/generic/SpatialClassNLLCriterion.cu>
+#include <THC/THCGenerateFloatTypes.h>
