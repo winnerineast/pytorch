@@ -33,6 +33,9 @@ std::unique_ptr<THCState, void (*)(THCState*)> CUDAHooks::initCUDA() const {
   THCState* thc_state = THCState_alloc();
 
   THCudaInit(thc_state);
+#ifdef USE_MAGMA
+  THCMagma_init(thc_state);
+#endif
   return std::unique_ptr<THCState, void (*)(THCState*)>(
       thc_state, [](THCState* p) {
         if (p)
@@ -46,12 +49,7 @@ std::unique_ptr<Generator> CUDAHooks::initCUDAGenerator(
 }
 
 bool CUDAHooks::hasCUDA() const {
-  int count;
-  cudaError_t err = cudaGetDeviceCount(&count);
-  if (err == cudaErrorInsufficientDriver) {
-    return false;
-  }
-  return true;
+  return at::cuda::is_available();
 }
 
 bool CUDAHooks::hasMAGMA() const {
@@ -93,13 +91,10 @@ bool CUDAHooks::compiledWithMIOpen() const {
 
 bool CUDAHooks::supportsDilatedConvolutionWithCuDNN() const {
 #if AT_CUDNN_ENABLED()
-  cudaDeviceProp* prop =
-      THCState_getCurrentDeviceProperties(globalContext().getTHCState());
+  cudaDeviceProp* prop = at::cuda::getCurrentDeviceProperties();
   // NOTE: extra parenthesis around numbers disable clang warnings about
   // dead code
-  return (
-      (CUDNN_VERSION >= (6021)) ||
-      (CUDNN_VERSION >= (6000) && prop->major >= 5));
+  return true;
 #else
   return false;
 #endif
@@ -155,15 +150,7 @@ void CUDAHooks::cuFFTClearPlanCache() const {
 }
 
 int CUDAHooks::getNumGPUs() const {
-  int count;
-  auto err = cudaGetDeviceCount(&count);
-  if (err == cudaErrorNoDevice) {
-    return 0;
-  } else if (err != cudaSuccess) {
-    AT_ERROR(
-        "CUDA error (", static_cast<int>(err), "): ", cudaGetErrorString(err));
-  }
-  return count;
+  return at::cuda::device_count();
 }
 
 // Sigh, the registry doesn't support namespaces :(

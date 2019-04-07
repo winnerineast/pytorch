@@ -318,10 +318,10 @@ class BuildExtension(build_ext, object):
                             '/wd4819', '-Xcompiler', '/MD'
                         ] + include_list + cflags
                     elif isinstance(self.cflags, dict):
-                        cflags = self.cflags['cxx']
+                        cflags = self.cflags['cxx'] + ['/MD']
                         cmd += cflags
                     elif isinstance(self.cflags, list):
-                        cflags = self.cflags
+                        cflags = self.cflags + ['/MD']
                         cmd += cflags
 
                 return original_spawn(cmd)
@@ -417,7 +417,7 @@ def CppExtension(name, sources, *args, **kwargs):
                     CppExtension(
                         name='extension',
                         sources=['extension.cpp'],
-                        extra_compile_args=['-g'])),
+                        extra_compile_args=['-g']),
                 ],
                 cmdclass={
                     'build_ext': BuildExtension
@@ -480,6 +480,7 @@ def CUDAExtension(name, sources, *args, **kwargs):
     libraries.append('cudart')
     if IS_WINDOWS:
         libraries.append('c10')
+        libraries.append('c10_cuda')
         libraries.append('caffe2')
         libraries.append('torch')
         libraries.append('torch_python')
@@ -508,7 +509,7 @@ def include_paths(cuda=False):
     '''
     here = os.path.abspath(__file__)
     torch_path = os.path.dirname(os.path.dirname(here))
-    lib_include = os.path.join(torch_path, 'lib', 'include')
+    lib_include = os.path.join(torch_path, 'include')
     paths = [
         lib_include,
         # Remove this once torch/torch.h is officially no longer supported for C++ extensions.
@@ -519,7 +520,11 @@ def include_paths(cuda=False):
         os.path.join(lib_include, 'THC')
     ]
     if cuda:
-        paths.append(_join_cuda_home('include'))
+        cuda_home_include = _join_cuda_home('include')
+        # if we have the Debian/Ubuntu packages for cuda, we get /usr as cuda home.
+        # but gcc dosn't like having /usr/include passed explicitly
+        if cuda_home_include != '/usr/include':
+            paths.append(cuda_home_include)
         if CUDNN_HOME is not None:
             paths.append(os.path.join(CUDNN_HOME, 'include'))
     return paths
@@ -1022,6 +1027,7 @@ def _write_ninja_file(path,
         cuda_flags = common_cflags + COMMON_NVCC_FLAGS
         if IS_WINDOWS:
             cuda_flags = _nt_quote_args(cuda_flags)
+            cuda_flags += _nt_quote_args(extra_cuda_cflags)
         else:
             cuda_flags += ['--compiler-options', "'-fPIC'"]
             cuda_flags += extra_cuda_cflags

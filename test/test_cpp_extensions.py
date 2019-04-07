@@ -13,6 +13,7 @@ from torch.utils.cpp_extension import CUDA_HOME
 
 try:
     import torch_test_cpp_extension.cpp as cpp_extension
+    import torch_test_cpp_extension.msnpu as msnpu_extension
 except ImportError:
     warnings.warn(
         "test_cpp_extensions.py cannot be invoked directly. Run "
@@ -310,7 +311,11 @@ class TestCppExtension(common.TestCase):
             verbose=True,
         )
 
-        torch.empty(2, 2, dtype=torch.complex64)
+        # Make sure that the empty tensor is of the desired shape and type
+        # Refer to https://github.com/pytorch/pytorch/issues/14829
+        t = torch.empty(2, 2, dtype=torch.complex64)
+        self.assertEqual(t.size(), torch.Size([2, 2]))
+        self.assertEqual(t.type(), 'torch.ComplexFloatTensor')
 
     @unittest.skipIf(not TEST_CUDA, "CUDA not found")
     def test_half_support(self):
@@ -333,7 +338,7 @@ class TestCppExtension(common.TestCase):
 
         torch::Tensor half_test(torch::Tensor input) {
             auto output = torch::empty(1, input.options().dtype(torch::kFloat));
-            AT_DISPATCH_FLOATING_TYPES_AND_HALF(input.type(), "half_test", [&] {
+            AT_DISPATCH_FLOATING_TYPES_AND_HALF(input.scalar_type(), "half_test", [&] {
                 half_test_kernel<scalar_t><<<1, 1>>>(
                     input.data<scalar_t>(),
                     output.data<float>());
@@ -449,7 +454,7 @@ class TestCppExtension(common.TestCase):
         sequential.to(old_dtype)
         self.assertEqual(sequential[2].parameters()[0].dtype, old_dtype)
 
-        # Make sure we can access these method recursively.
+        # Make sure we can access these methods recursively.
         self.assertEqual(len(list(sequential.parameters())), len(net.parameters()) * 2 + 1)
         self.assertEqual(len(list(sequential.named_parameters())), len(net.named_parameters()) * 2 + 1)
         self.assertEqual(len(list(sequential.buffers())), len(net.buffers()) * 2)
@@ -552,6 +557,22 @@ class TestCppExtension(common.TestCase):
             self.assertTrue(p.device.index == 0)
             self.assertEqual(cpu_parameters[i], p)
 
+        net.cpu()
+        net.add_new_parameter("a", torch.eye(5))
+        net.add_new_parameter("b", torch.eye(5))
+        net.add_new_buffer("c", torch.eye(5))
+        net.add_new_buffer("d", torch.eye(5))
+        net.add_new_submodule("fc2")
+        net.add_new_submodule("fc3")
+
+        for p in net.parameters():
+            self.assertTrue(p.device.type == "cpu")
+
+        net.cuda()
+
+        for p in net.parameters():
+            self.assertTrue(p.device.type == "cuda")
+
     def test_returns_shared_library_path_when_is_python_module_is_true(self):
         source = """
         #include <torch/script.h>
@@ -600,6 +621,57 @@ class TestCppExtension(common.TestCase):
             self.assertEqual(module.get().dtype, torch.float16)
         finally:
             torch.set_default_dtype(initial_default)
+
+
+class TestMSNPUTensor(common.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        msnpu_extension.init_msnpu_extension()
+
+    def test_unregistered(self):
+        a = torch.empty(5, 5, device='cpu')
+        with self.assertRaisesRegex(RuntimeError, "No function registered"):
+            b = torch.empty(5, 5, device='msnpu')
+
+    def test_zeros(self):
+        a = torch.zeros(5, 5, device='cpu')
+        self.assertEqual(a.device, torch.device('cpu'))
+        self.assertEqual(a.sum(), 0)
+
+        b = torch.zeros(5, 5, device='msnpu')
+        self.assertEqual(b.device, torch.device('msnpu', 0))
+        self.assertEqual(msnpu_extension.get_test_int(), 0)
+        self.assertEqual(torch.get_default_dtype(), b.dtype)
+
+        c = torch.zeros((5, 5), dtype=torch.int64, device='msnpu')
+        self.assertEqual(msnpu_extension.get_test_int(), 0)
+        self.assertEqual(torch.int64, c.dtype)
+
+    def test_add(self):
+        a = torch.zeros(5, 5, device='msnpu')
+        self.assertEqual(msnpu_extension.get_test_int(), 0)
+
+        b = torch.zeros(5, 5, device='msnpu')
+        self.assertEqual(msnpu_extension.get_test_int(), 0)
+
+        c = torch.add(a, b)
+        self.assertEqual(msnpu_extension.get_test_int(), 1)
+
+    def test_backwards(self):
+        a = torch.zeros(5, 5, device='msnpu', requires_grad=True)
+        self.assertEqual(msnpu_extension.get_test_int(), 0)
+
+        b = torch.zeros(5, 5, device='msnpu')
+        self.assertEqual(msnpu_extension.get_test_int(), 0)
+
+        c = torch.kl_div(a, b)
+        self.assertEqual(msnpu_extension.get_test_int(), 3)
+
+        d = c.sum()
+        self.assertEqual(msnpu_extension.get_test_int(), 2)
+
+        d.backward()
+        self.assertEqual(msnpu_extension.get_test_int(), 4)
 
 
 if __name__ == "__main__":

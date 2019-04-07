@@ -6,6 +6,7 @@
 #include <c10/util/Exception.h>
 
 #include <cstddef>
+#include <ostream>
 #include <utility>
 #include <vector>
 
@@ -27,9 +28,17 @@ void BatchNormImpl::reset() {
   if (options.stateful_) {
     running_mean =
         register_buffer("running_mean", torch::zeros({options.features_}));
-    running_variance =
-        register_buffer("running_variance", torch::ones({options.features_}));
+    running_var =
+        register_buffer("running_var", torch::ones({options.features_}));
   }
+}
+
+void BatchNormImpl::pretty_print(std::ostream& stream) const {
+  stream << std::boolalpha
+         << "torch::nn::BatchNorm(features=" << options.features_
+         << ", eps=" << options.eps_ << ", momentum=" << options.momentum_
+         << ", affine=" << options.affine_ << ", stateful=" << options.stateful_
+         << ")";
 }
 
 Tensor BatchNormImpl::forward(const Tensor& input) {
@@ -38,7 +47,7 @@ Tensor BatchNormImpl::forward(const Tensor& input) {
       "Calling BatchNorm::forward is only permitted when "
       "the 'stateful' option is true (was false). "
       "Use BatchNorm::pure_forward instead.");
-  return pure_forward(input, running_mean, running_variance);
+  return pure_forward(input, running_mean, running_var);
 }
 
 Tensor BatchNormImpl::pure_forward(

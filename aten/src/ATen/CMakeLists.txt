@@ -16,6 +16,13 @@ IF(NOT AT_INSTALL_BIN_DIR OR NOT AT_INSTALL_LIB_DIR OR NOT AT_INSTALL_INCLUDE_DI
   SET(AT_INSTALL_SHARE_DIR "share" CACHE PATH "AT install include subdirectory")
 ENDIF()
 
+# this flag is used in Config but set externally, we must normalize it
+# to 0/1 otherwise `#if ON` will be evaluated to false.
+if (CAFFE2_STATIC_LINK_CUDA)
+  set(CAFFE2_STATIC_LINK_CUDA_INT 1)
+else()
+  set(CAFFE2_STATIC_LINK_CUDA_INT 0)
+endif()
 CONFIGURE_FILE(Config.h.in "${CMAKE_CURRENT_SOURCE_DIR}/Config.h")
 # TODO: Don't unconditionally generate CUDAConfig.h.in.  Unfortuantely,
 # this file generates AT_ROCM_ENABLED() which is required by the miopen
@@ -49,6 +56,7 @@ FILE(GLOB native_cpp "native/*.cpp")
 FILE(GLOB native_mkl_cpp "native/mkl/*.cpp")
 FILE(GLOB native_mkldnn_cpp "native/mkldnn/*.cpp")
 FILE(GLOB native_sparse_cpp "native/sparse/*.cpp")
+FILE(GLOB native_quantized_cpp "native/quantized/*.cpp")
 
 FILE(GLOB native_cuda_cu "native/cuda/*.cu")
 FILE(GLOB native_cuda_cpp "native/cuda/*.cpp")
@@ -63,7 +71,8 @@ FILE(GLOB native_cudnn_hip_cpp "native/cudnn/hip/*.cpp")
 FILE(GLOB native_sparse_hip_hip "native/sparse/hip/*.hip")
 FILE(GLOB native_sparse_hip_cpp "native/sparse/hip/*.cpp")
 
-set(all_cpu_cpp ${base_cpp} ${ATen_CORE_SRCS} ${native_cpp} ${native_sparse_cpp} ${native_mkl_cpp} ${native_mkldnn_cpp} ${generated_cpp} ${ATen_CPU_SRCS} ${cpu_kernel_cpp})
+add_subdirectory(quantized)
+set(all_cpu_cpp ${base_cpp} ${ATen_CORE_SRCS} ${native_cpp} ${native_sparse_cpp} ${native_quantized_cpp} ${native_mkl_cpp} ${native_mkldnn_cpp} ${generated_cpp} ${ATen_CPU_SRCS} ${ATen_QUANTIZED_SRCS} ${cpu_kernel_cpp})
 if(AT_MKL_ENABLED)
   set(all_cpu_cpp ${all_cpu_cpp} ${mkl_cpp})
 endif()
@@ -181,6 +190,11 @@ ENDIF(UNIX)
 
 if(NOT MSVC)
   list(APPEND ATen_CPU_DEPENDENCY_LIBS m)
+endif()
+
+if(AT_NNPACK_ENABLED)
+  include_directories(${NNPACK_INCLUDE_DIRS})
+  list(APPEND ATen_CPU_DEPENDENCY_LIBS nnpack pthreadpool) # cpuinfo is added below
 endif()
 
 if(MKLDNN_FOUND)
@@ -423,10 +437,12 @@ set(ATen_CORE_SRCS ${ATen_CORE_SRCS} PARENT_SCOPE)
 set(ATen_CPU_SRCS ${ATen_CPU_SRCS} PARENT_SCOPE)
 set(ATen_CUDA_SRCS ${ATen_CUDA_SRCS} PARENT_SCOPE)
 set(ATen_HIP_SRCS ${ATen_HIP_SRCS} PARENT_SCOPE)
+set(ATen_QUANTIZED_SRCS ${ATen_QUANTIZED_SRCS} PARENT_SCOPE)
 set(ATen_CPU_TEST_SRCS ${ATen_CPU_TEST_SRCS} PARENT_SCOPE)
 set(ATen_CUDA_TEST_SRCS ${ATen_CUDA_TEST_SRCS} PARENT_SCOPE)
 set(ATen_CORE_TEST_SRCS ${ATen_CORE_TEST_SRCS} PARENT_SCOPE)
 set(ATen_HIP_TEST_SRCS ${ATen_HIP_TEST_SRCS} PARENT_SCOPE)
+set(ATen_QUANTIZED_TEST_SRCS ${ATen_QUANTIZED_TEST_SRCS} PARENT_SCOPE)
 set(ATen_CPU_INCLUDE ${ATen_CPU_INCLUDE} PARENT_SCOPE)
 set(ATen_THIRD_PARTY_INCLUDE ${ATen_THIRD_PARTY_INCLUDE} PARENT_SCOPE)
 set(ATen_CUDA_INCLUDE ${ATen_CUDA_INCLUDE} PARENT_SCOPE)

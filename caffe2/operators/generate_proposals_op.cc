@@ -228,7 +228,6 @@ void GenerateProposalsOp<CPUContext>::ProposalsForOneImage(
       bbox_deltas_sorted,
       bbox_weights,
       utils::BBOX_XFORM_CLIP_DEFAULT,
-      correct_transform_coords_,
       angle_bound_on_,
       angle_bound_lo_,
       angle_bound_hi_);
@@ -345,8 +344,6 @@ bool GenerateProposalsOp<CPUContext>::RunOnDevice() {
   return true;
 }
 
-namespace {
-
 REGISTER_CPU_OPERATOR(GenerateProposals, GenerateProposalsOp<CPUContext>);
 // For backward compatibility
 REGISTER_CPU_OPERATOR(GenerateProposalsCPP, GenerateProposalsOp<CPUContext>);
@@ -365,12 +362,6 @@ non-maximum suppression is applied to generate the final bounding boxes.
     .Arg("post_nms_topN", "(int) RPN_POST_NMS_TOP_N")
     .Arg("nms_thresh", "(float) RPN_NMS_THRESH")
     .Arg("min_size", "(float) RPN_MIN_SIZE")
-    .Arg(
-        "correct_transform_coords",
-        "bool (default false), Correct bounding box transform coordates,"
-        " see bbox_transform() in boxes.py "
-        "Set to true to match the detectron code, set to false for backward"
-        " compatibility")
     .Arg(
         "angle_bound_on",
         "bool (default true). If set, for rotated boxes, angle is "
@@ -413,5 +404,27 @@ SHOULD_NOT_DO_GRADIENT(GenerateProposals);
 // For backward compatibility
 SHOULD_NOT_DO_GRADIENT(GenerateProposalsCPP);
 
-} // namespace
 } // namespace caffe2
+
+C10_REGISTER_CAFFE2_OPERATOR_CPU(
+    GenerateProposals,
+    (std::vector<c10::Argument>{
+        c10::Argument("scores"),
+        c10::Argument("bbox_deltas"),
+        c10::Argument("im_info"),
+        c10::Argument("anchors"),
+        c10::Argument("spatial_scale", FloatType::get()),
+        c10::Argument("pre_nms_topN", IntType::get()),
+        c10::Argument("post_nms_topN", IntType::get()),
+        c10::Argument("nms_thresh", FloatType::get()),
+        c10::Argument("min_size", FloatType::get()),
+        c10::Argument("angle_bound_on", BoolType::get()),
+        c10::Argument("angle_bound_lo", IntType::get()),
+        c10::Argument("angle_bound_hi", IntType::get()),
+        c10::Argument("clip_angle_thresh", FloatType::get()),
+    }),
+    (std::vector<c10::Argument>{
+        c10::Argument("output_0"),
+        c10::Argument("output_1"),
+    }),
+    caffe2::GenerateProposalsOp<caffe2::CPUContext>);

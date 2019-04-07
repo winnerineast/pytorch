@@ -18,41 +18,49 @@ C10_DEFINE_int64(
 namespace c10 {
 
 at::Tensor& TensorImpl::grad() {
-  AT_ERROR("grad is not implemented for Tensor");
+  if (autograd_meta()) {
+    return autograd_meta()->grad();
+  } else {
+    AT_ERROR("grad is not implemented for Tensor");
+  }
 }
 
 const at::Tensor& TensorImpl::grad() const {
-  AT_ERROR("grad is not implemented for Tensor");
-}
-
-TensorImpl::TensorImpl(TensorTypeId type_id, const caffe2::TypeMeta& data_type, Allocator *allocator, bool is_variable)
-    : TensorImpl({}, type_id, data_type, is_variable) {
-  // Variables, UndefinedTensors and SparseTensors don't have storages.
-  if (!is_variable && type_id != UndefinedTensorId() && data_type.id() != caffe2::TypeIdentifier::uninitialized()
-      && type_id != SparseCPUTensorId() && type_id != SparseCUDATensorId()) {
-    storage_ = Storage(data_type, 0, allocator, true);
+  if (autograd_meta()) {
+    return autograd_meta()->grad();
+  } else {
+    AT_ERROR("grad is not implemented for Tensor");
   }
 }
 
 TensorImpl::TensorImpl(Storage&& storage, TensorTypeId type_id, bool is_variable)
-    : TensorImpl(std::move(storage), type_id, storage.dtype(), is_variable) {}
+    : TensorImpl(std::move(storage), type_id, storage.dtype(), storage.device(), is_variable) {}
 
-TensorImpl::TensorImpl(Storage&& storage, TensorTypeId type_id, const caffe2::TypeMeta& data_type, bool is_variable)
+TensorImpl::TensorImpl(TensorTypeId type_id, const caffe2::TypeMeta& data_type, c10::optional<c10::Device> device_opt, bool is_variable)
+    : TensorImpl({}, type_id, data_type, std::move(device_opt), is_variable) {}
+
+TensorImpl::TensorImpl(Storage&& storage, TensorTypeId type_id, const caffe2::TypeMeta& data_type,
+                       c10::optional<c10::Device> device_opt, bool is_variable)
     : storage_(std::move(storage)),
       sizes_{0},
       storage_offset_(0),
       numel_(0),
       data_type_(data_type),
+      device_opt_(device_opt),
       type_id_(type_id),
       is_variable_(is_variable) {
+  AT_ASSERT(type_id == UndefinedTensorId() || data_type.id() ==  caffe2::TypeIdentifier::uninitialized() ||
+            device_opt_.has_value());
+  // we would also like to check that non-cpu devices have an index, but some Caffe2 operators create
+  // Storages with default devices.
   strides_.push_back(1);
 }
 
-IntList TensorImpl::sizes() const {
+IntArrayRef TensorImpl::sizes() const {
   return sizes_;
 }
 
-IntList TensorImpl::strides() const {
+IntArrayRef TensorImpl::strides() const {
   return strides_;
 }
 
@@ -102,6 +110,10 @@ TensorImpl* TensorImpl::maybe_zero_dim(bool condition_when_zero_dim) {
   return this;
 }
 
+bool TensorImpl::has_storage() const {
+  return storage_;
+}
+
 const Storage& TensorImpl::storage() const {
   return storage_;
 }
@@ -121,5 +133,7 @@ at::DataPtr PlacementDeleteContext::makeDataPtr(
           &deletePlacementDeleteContext,
           device};
 }
+
+AutogradMetaInterface::~AutogradMetaInterface() {}
 
 } // namespace c10

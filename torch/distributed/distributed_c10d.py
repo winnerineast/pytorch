@@ -3,16 +3,19 @@ import warnings
 from torch._six import string_classes
 from datetime import timedelta
 
-from .rendezvous import rendezvous, register_rendezvous_handler
+# This module is wildcard imported from torch.distributed.
+# TODO: specify __all__
+
+from .rendezvous import rendezvous, register_rendezvous_handler  # noqa: F401
 from . import BroadcastOptions, AllreduceOptions, ReduceOptions, \
     ScatterOptions, GatherOptions
 from . import ReduceOp
 from . import PrefixStore
-from . import ProcessGroupGloo
 
 
 _MPI_AVAILABLE = True
 _NCCL_AVAILABLE = True
+_GLOO_AVAILABLE = True
 
 
 try:
@@ -24,6 +27,11 @@ try:
     from. import ProcessGroupNCCL
 except ImportError:
     _NCCL_AVAILABLE = False
+
+try:
+    from. import ProcessGroupGloo
+except ImportError:
+    _GLOO_AVAILABLE = False
 
 
 class Backend(object):
@@ -227,7 +235,7 @@ def _check_tensor_list(param, param_name):
 
 def is_mpi_available():
     """
-    Checks if MPI is available
+    Checks if the MPI backend is available.
 
     """
     return _MPI_AVAILABLE
@@ -235,10 +243,18 @@ def is_mpi_available():
 
 def is_nccl_available():
     """
-    Checks if NCCL is available
+    Checks if the NCCL backend is available.
 
     """
     return _NCCL_AVAILABLE
+
+
+def is_gloo_available():
+    """
+    Checks if the Gloo backend is available.
+
+    """
+    return _GLOO_AVAILABLE
 
 
 def is_initialized():
@@ -297,12 +313,17 @@ def init_process_group(backend,
             build-time configurations, valid values include ``mpi``, ``gloo``,
             and ``nccl``. This field should be given as a lowercase string
             (e.g., ``"gloo"``), which can also be accessed via
-            :class:`Backend` attributes (e.g., ``Backend.GLOO``).
+            :class:`Backend` attributes (e.g., ``Backend.GLOO``). If using
+            multiple processes per machine with ``nccl`` backend, each process
+            must have exclusive access to every GPU it uses, as sharing GPUs
+            between processes can result in deadlocks.
         init_method (str, optional): URL specifying how to initialize the
                                      process group.
         world_size (int, optional): Number of processes participating in
                                     the job.
         rank (int, optional): Rank of the current process.
+        store(Store, optional): Rendevous key/value store as an alternative
+                                to other init methods.
         timeout (timedelta, optional): Timeout for operations executed against
             the process group. Default value equals 30 minutes.
             This is only applicable for the ``gloo`` backend.
@@ -329,6 +350,10 @@ def init_process_group(backend,
     world_size = kwargs.pop('world_size', -1)
     group_name = kwargs.pop('group_name', '')
     rank = kwargs.pop('rank', -1)
+    store = kwargs.pop('store', None)
+    if store is not None:
+        assert world_size > 0, 'world_size needs to be positive'
+        assert rank >= 0, 'rank needs to be non-negative'
     assert len(kwargs) == 0, \
         "got unexpected keyword arguments: %s" % ",".join(kwargs.keys())
 
@@ -351,7 +376,8 @@ def init_process_group(backend,
         elif world_size != -1:
             url += "?world_size={}".format(world_size)
 
-        store, rank, world_size = next(rendezvous(url))
+        if store is None:
+            store, rank, world_size = next(rendezvous(url))
         if backend == Backend.GLOO:
             _default_pg = ProcessGroupGloo(
                 store,
@@ -377,7 +403,8 @@ def _new_process_group_helper(world_size,
                               group_ranks,
                               in_group,
                               group_name,
-                              timeout=_default_pg_timeout):
+                              timeout=_default_pg_timeout,
+                              backend=None):
     """
     Create a new distributed process group. And the new process group can be
     used to perform collective operations.
@@ -400,8 +427,12 @@ def _new_process_group_helper(world_size,
                            "datetime.timedelta")
 
     default_backend, default_store = _pg_map[_default_pg]
+    if backend is None:
+        backend = default_backend
+    else:
+        backend = Backend(backend)
 
-    if default_backend == Backend.MPI:
+    if backend == Backend.MPI:
         if not is_mpi_available():
             raise RuntimeError("Distributed package doesn't have MPI built in")
         pg = ProcessGroupMPI(group_ranks)
@@ -411,7 +442,7 @@ def _new_process_group_helper(world_size,
         # Create the prefix store
         store = PrefixStore(group_name, default_store)
 
-        if default_backend == Backend.GLOO:
+        if backend == Backend.GLOO:
             pg = ProcessGroupGloo(
                 store,
                 rank,
@@ -419,7 +450,7 @@ def _new_process_group_helper(world_size,
                 timeout=timeout)
             _pg_map[pg] = (Backend.GLOO, store)
             _pg_names[pg] = group_name
-        elif default_backend == Backend.NCCL:
+        elif backend == Backend.NCCL:
             if not is_nccl_available():
                 raise RuntimeError("Distributed package doesn't have NCCL "
                                    "built in")
@@ -473,7 +504,7 @@ def destroy_process_group(group=group.WORLD):
 
 def get_rank(group=group.WORLD):
     """
-    Returns the rank of currrent process group
+    Returns the rank of current process group
 
     Rank is a unique identifier assigned to each process within a distributed
     process group. They are always consecutive integers ranging from 0 to
@@ -665,10 +696,10 @@ def broadcast_multigpu(tensor_list,
 
     Arguments:
         tensor_list (List[Tensor]): Tensors that participate in the collective
-            operation. if ``src`` is the rank, then ``src_tensor``th element of
-            ``tensor_list`` (``tensor_list[src_tensor]``) will be broadcasted
-            to all other tensors (on different GPUs) in the src process and
-            all tensors in ``tensor_list`` of other non-src processes.
+            operation. If ``src`` is the rank, then the specified ``src_tensor``
+            element of ``tensor_list`` (``tensor_list[src_tensor]``) will be
+            broadcast to all other tensors (on different GPUs) in the src process
+            and all tensors in ``tensor_list`` of other non-src processes.
             You also need to make sure that ``len(tensor_list)`` is the same
             for all the distributed processes calling this function.
 
@@ -1184,7 +1215,7 @@ def barrier(group=group.WORLD,
         work.wait()
 
 
-def new_group(ranks=None, timeout=_default_pg_timeout):
+def new_group(ranks=None, timeout=_default_pg_timeout, backend=None):
     """
     Creates a new distributed group.
 
@@ -1198,6 +1229,12 @@ def new_group(ranks=None, timeout=_default_pg_timeout):
         timeout (timedelta, optional): Timeout for operations executed against
             the process group. Default value equals 30 minutes.
             This is only applicable for the ``gloo`` backend.
+        backend (str or Backend, optional): The backend to use. Depending on
+            build-time configurations, valid values are ``gloo`` and ``nccl``.
+            By default uses the same backend as the global group. This field
+            should be given as a lowercase string (e.g., ``"gloo"``), which can
+            also be accessed via :class:`Backend` attributes (e.g.,
+            ``Backend.GLOO``).
 
     Returns:
         A handle of distributed group that can be given to collective calls.
@@ -1257,12 +1294,15 @@ def new_group(ranks=None, timeout=_default_pg_timeout):
             return GroupMember.NON_GROUP_MEMBER
 
         if default_backend != Backend.MPI:
+            if backend is None:
+                backend = default_backend
             pg = _new_process_group_helper(group_world_size,
                                            group_rank,
                                            input_ranks,
                                            True,
                                            group_name,
-                                           timeout=timeout)
+                                           timeout=timeout,
+                                           backend=backend)
 
     # Create the global rank to group rank mapping
     _pg_group_ranks[pg] = {}

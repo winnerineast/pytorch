@@ -6,11 +6,14 @@
 #include "caffe2/utils/eigen_utils.h"
 #include "caffe2/utils/math.h"
 
+C10_DECLARE_CAFFE2_OPERATOR(GenerateProposals);
+
 namespace caffe2 {
 
 namespace utils {
 
 // A sub tensor view
+// TODO: Remove???
 template <class T>
 class ConstTensorView {
  public:
@@ -75,8 +78,9 @@ template <class Context>
 class GenerateProposalsOp final : public Operator<Context> {
  public:
   USE_OPERATOR_CONTEXT_FUNCTIONS;
-  GenerateProposalsOp(const OperatorDef& operator_def, Workspace* ws)
-      : Operator<Context>(operator_def, ws),
+  template<class... Args>
+  explicit GenerateProposalsOp(Args&&... args)
+      : Operator<Context>(std::forward<Args>(args)...),
         spatial_scale_(
             this->template GetSingleArgument<float>("spatial_scale", 1.0 / 16)),
         feat_stride_(1.0 / spatial_scale_),
@@ -87,9 +91,6 @@ class GenerateProposalsOp final : public Operator<Context> {
         rpn_nms_thresh_(
             this->template GetSingleArgument<float>("nms_thresh", 0.7f)),
         rpn_min_size_(this->template GetSingleArgument<float>("min_size", 16)),
-        correct_transform_coords_(this->template GetSingleArgument<bool>(
-            "correct_transform_coords",
-            false)),
         angle_bound_on_(
             this->template GetSingleArgument<bool>("angle_bound_on", true)),
         angle_bound_lo_(
@@ -131,10 +132,6 @@ class GenerateProposalsOp final : public Operator<Context> {
   float rpn_nms_thresh_{0.7};
   // RPN_MIN_SIZE
   float rpn_min_size_{16};
-  // Correct bounding box transform coordates, see bbox_transform() in boxes.py
-  // Set to true to match the detectron code, set to false for backward
-  // compatibility
-  bool correct_transform_coords_{false};
   // If set, for rotated boxes in RRPN, output angles are normalized to be
   // within [angle_bound_lo, angle_bound_hi].
   bool angle_bound_on_{true};
@@ -144,6 +141,33 @@ class GenerateProposalsOp final : public Operator<Context> {
   // tolerance for backward compatibility. Set to negative value for
   // no clipping.
   float clip_angle_thresh_{1.0};
+
+  // Scratch space required by the CUDA version
+  // CUB buffers
+  Tensor dev_cub_sort_buffer_{Context::GetDeviceType()};
+  Tensor dev_cub_select_buffer_{Context::GetDeviceType()};
+  Tensor dev_image_offset_{Context::GetDeviceType()};
+  Tensor dev_conv_layer_indexes_{Context::GetDeviceType()};
+  Tensor dev_sorted_conv_layer_indexes_{Context::GetDeviceType()};
+  Tensor dev_sorted_scores_{Context::GetDeviceType()};
+  Tensor dev_boxes_{Context::GetDeviceType()};
+  Tensor dev_boxes_keep_flags_{Context::GetDeviceType()};
+
+  // prenms proposals (raw proposals minus empty boxes)
+  Tensor dev_image_prenms_boxes_{Context::GetDeviceType()};
+  Tensor dev_image_prenms_scores_{Context::GetDeviceType()};
+  Tensor dev_prenms_nboxes_{Context::GetDeviceType()};
+  Tensor host_prenms_nboxes_{CPU};
+
+  Tensor dev_image_boxes_keep_list_{Context::GetDeviceType()};
+
+  // Tensors used by NMS
+  Tensor dev_nms_mask_{Context::GetDeviceType()};
+  Tensor host_nms_mask_{CPU};
+
+  // Buffer for output
+  Tensor dev_postnms_rois_{Context::GetDeviceType()};
+  Tensor dev_postnms_rois_probs_{Context::GetDeviceType()};
 };
 
 } // namespace caffe2
