@@ -44,6 +44,7 @@
 #include <torch/csrc/jit/init.h>
 #include <torch/csrc/jit/python_ir.h>
 #include <torch/csrc/onnx/init.h>
+#include <torch/csrc/utils/init.h>
 #include <torch/csrc/api/include/torch/python/init.h>
 
 #ifdef USE_CUDNN
@@ -124,6 +125,7 @@ static PyObject * THPModule_initExtension(PyObject *_unused, PyObject *shm_manag
   THPQUInt8Storage_postInit(module);
   THPQInt8Storage_postInit(module);
   THPQInt32Storage_postInit(module);
+  THPBFloat16Storage_postInit(module);
   THPAutograd_initFunctions();
   Py_RETURN_NONE;
   END_HANDLE_TH_ERRORS
@@ -462,7 +464,7 @@ PyObject *THPModule_getDefaultDtype(PyObject *_unused, PyObject *arg) {
 PyObject *THPModule_getDefaultDevice(PyObject *_unused, PyObject *arg) {
   HANDLE_TH_ERRORS
   return THPUtils_packString(
-          c10::DeviceTypeName(torch::tensors::get_default_tensor_type().device_type(),
+          c10::DeviceTypeName(computeDeviceType(torch::tensors::get_default_tensor_type_id()),
                               /*lower_case=*/true));
   END_HANDLE_TH_ERRORS
 }
@@ -513,6 +515,7 @@ bool THCPShortStorage_init(PyObject *module);
 bool THCPCharStorage_init(PyObject *module);
 bool THCPByteStorage_init(PyObject *module);
 bool THCPBoolStorage_init(PyObject *module);
+bool THCPBFloat16Storage_init(PyObject *module);
 
 void THCPStream_init(PyObject *module);
 void THCPEvent_init(PyObject *module);
@@ -534,6 +537,17 @@ void init__THCUNN(PyObject*);
 #endif
 
 }} // namespace torch::nn
+
+bool THDPDoubleStorage_init(PyObject *module);
+bool THDPFloatStorage_init(PyObject *module);
+//bool THDPHalfStorage_init(PyObject *module);
+bool THDPLongStorage_init(PyObject *module);
+bool THDPIntStorage_init(PyObject *module);
+bool THDPShortStorage_init(PyObject *module);
+bool THDPCharStorage_init(PyObject *module);
+bool THDPByteStorage_init(PyObject *module);
+bool THDPBoolStorage_init(PyObject *module);
+bool THDPBFloat16Storage_init(PyObject *module);
 
 static std::vector<PyMethodDef> methods;
 
@@ -644,6 +658,7 @@ PyObject* initModule() {
   // init.
   torch::onnx::initONNXBindings(module);
   torch::jit::initJITBindings(module);
+  torch::throughput_benchmark::initThroughputBenchmarkBindings(module);
   torch::autograd::initNNFunctions(module);
   torch::autograd::init_legacy_variable(module);
   torch::python::init_bindings(module);
@@ -662,6 +677,7 @@ PyObject* initModule() {
   ASSERT_TRUE(THPQUInt8Storage_init(module));
   ASSERT_TRUE(THPQInt8Storage_init(module));
   ASSERT_TRUE(THPQInt32Storage_init(module));
+  ASSERT_TRUE(THPBFloat16Storage_init(module));
 
 #ifdef USE_CUDA
   // This will only initialise base classes and attach them to library namespace
@@ -677,6 +693,7 @@ PyObject* initModule() {
   ASSERT_TRUE(THCPCharStorage_init(module));
   ASSERT_TRUE(THCPByteStorage_init(module));
   ASSERT_TRUE(THCPBoolStorage_init(module));
+  ASSERT_TRUE(THCPBFloat16Storage_init(module));
 
   THCPStream_init(module);
   THCPEvent_init(module);
