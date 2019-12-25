@@ -20,18 +20,20 @@ class TestNamedTupleAPI(unittest.TestCase):
 
     def test_native_functions_yaml(self):
         operators_found = set()
-        regex = re.compile(r"^(\w*)\(")
+        regex = re.compile(r"^(\w*)(\(|\.)")
         file = open(aten_native_yaml, 'r')
         for f in yaml.load(file.read()):
             f = f['func']
             ret = f.split('->')[1].strip()
-            name = regex.findall(f)[0]
+            name = regex.findall(f)[0][0]
             if name in all_operators_with_namedtuple_return:
                 operators_found.add(name)
                 continue
-            if name.endswith('_backward') or name.endswith('_forward'):
+            if '_backward' in name or name.endswith('_forward'):
                 continue
             if not ret.startswith('('):
+                continue
+            if ret == '()':
                 continue
             ret = ret[1:-1].split(',')
             for r in ret:

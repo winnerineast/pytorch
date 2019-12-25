@@ -37,9 +37,13 @@ bool isDecomposableNorm(Node* normalize_op) {
       "aten::layer_norm(Tensor input, int[] normalized_shape, Tensor? weight, Tensor? bias, float eps, bool cudnn_enable) -> Tensor",
   };
   Value* input = normalize_op->namedInput(attr::input);
-  auto tensor_type = input->type()->cast<DimensionedTensorType>();
-  // As of now, we do the decomposition for batchnorm/layernorm on GPU device only
-  if (!tensor_type || tensor_type->device().is_cpu()) {
+  if (!input->type()->isSubtypeOf(TensorType::get())) {
+    return false;
+  }
+  auto device = input->type()->expect<TensorType>()->device();
+  // As of now, we do the decomposition for batchnorm/layernorm on GPU device
+  // only
+  if (!device || (*device).is_cpu()) {
     return false;
   }
 
@@ -55,7 +59,7 @@ bool isDecomposableNorm(Node* normalize_op) {
 
 RegisterOperators reg_bn_unsqueeze({Operator(
     "aten::_ncf_unsqueeze(Tensor self, int ndim) -> Tensor",
-    [](const Node* node) {
+    [](const Node* node) -> Operation {
       return [](Stack& stack) {
         const int64_t ndim = pop(stack).toInt();
         auto self = pop(stack).toTensor();
@@ -70,7 +74,7 @@ RegisterOperators reg_bn_unsqueeze({Operator(
 
 RegisterOperators reg_ln_view({Operator(
     "aten::_ncf_view(Tensor self, int[] input_shape, int normalized_ndim) -> Tensor",
-    [](const Node* node) {
+    [](const Node* node) -> Operation {
       return [](Stack& stack) {
         const int64_t normalized_ndim = pop(stack).toInt();
         auto input_shape = pop(stack).toIntList();

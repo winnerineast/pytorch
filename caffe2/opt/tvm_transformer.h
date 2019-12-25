@@ -23,18 +23,20 @@ class CAFFE2_API TvmTransformer final : public BackendTransformerBase {
   ~TvmTransformer() override {}
 
   // Given workspace and predict net, cluster continuous parts that can be run
-  // by TVM and create one TVMJit op for each clustered subgraph. \param ws c2
-  // workspace \param pred_net c2 predict net \param weight_names list of the
-  // names of the constant weights \param shape_hints User provided shape info,
-  // usually for primary inputs so that bound shape inference can have something
-  // to start \param blacklisted_ops a set of ops that we don't want to lower to
-  // TVM in terms of their net positions. This is very useful for debugging but
-  // for normal runs it should be empty
+  // by TVM and create one TVMJit op for each clustered subgraph.
+  // \param ws c2 workspace
+  // \param pred_net c2 predict net
+  // \param weight_names list of the names of the constant weights
+  // \param shape_hints User provided shape info, usually for primary inputs so
+  // that bound shape inference can have something to start
+  // \param blacklisted_ops a set of ops that we don't want to lower to TVM in
+  // terms of their net positions. This is very useful for debugging but for
+  // normal runs it should be empty
   void transform(
       Workspace* ws,
       NetDef* pred_net,
       const std::vector<std::string>& weight_names,
-      const std::unordered_map<std::string, TensorShape>& shape_hints,
+      const ShapeInfoMap& shape_hints,
       const std::unordered_set<int>& blacklisted_ops) override;
 
  private:
@@ -68,7 +70,7 @@ CAFFE2_API void tvmTransform(
     const std::vector<std::string>& input_names,
     const std::vector<std::string>& output_names,
     const std::vector<std::string>& weight_names,
-    const std::unordered_map<std::string, TensorShape>& shape_hints,
+    const ShapeInfoMap& shape_hints,
     const std::unordered_set<int>& blacklisted_ops,
     size_t max_batch_size,
     size_t max_seq_size,

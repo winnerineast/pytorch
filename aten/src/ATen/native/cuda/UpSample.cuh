@@ -124,13 +124,32 @@ static inline void upsample_3d_shape_check(
 }
 
 template <typename accscalar_t>
+__host__ __forceinline__ static accscalar_t compute_scales_value(
+    const double scale,
+    int64_t input_size,
+    int64_t output_size) {
+  return (scale > 0.) ? (accscalar_t)(1.0 / scale)
+                      : (accscalar_t)input_size / output_size;
+}
+
+template <typename accscalar_t>
+__host__ __forceinline__ static accscalar_t compute_scales_value_backwards(
+    const double scale,
+    int64_t input_size,
+    int64_t output_size) {
+  return (scale > 0.) ? (accscalar_t)scale
+                      : (accscalar_t)input_size / output_size;
+}
+
+template <typename accscalar_t>
 __host__ __forceinline__ static accscalar_t area_pixel_compute_scale(
     int input_size,
     int output_size,
-    bool align_corners) {
+    bool align_corners,
+    const double scale=-1.0) {
   if (output_size > 1) {
     return align_corners ? (accscalar_t)(input_size - 1) / (output_size - 1)
-                         : (accscalar_t)input_size / output_size;
+                         :  compute_scales_value<accscalar_t>(scale, input_size, output_size);
   } else {
     return static_cast<accscalar_t>(0);
   }
@@ -166,7 +185,7 @@ __device__ __forceinline__ static int nearest_neighbor_compute_source_index(
 /* Used by UpSampleBicubic2d.cu */
 template <typename scalar_t>
 __device__ __forceinline__ static scalar_t upsample_get_value_bounded(
-    const PackedTensorAccessor<scalar_t, 4>& data,
+    const PackedTensorAccessor64<scalar_t, 4>& data,
     int batch,
     int channel,
     int height,
@@ -181,7 +200,7 @@ __device__ __forceinline__ static scalar_t upsample_get_value_bounded(
 /* Used by UpSampleBicubic2d.cu */
 template <typename scalar_t, typename accscalar_t>
 __device__ __forceinline__ static void upsample_increment_value_bounded(
-    PackedTensorAccessor<scalar_t, 4>& data,
+    PackedTensorAccessor64<scalar_t, 4>& data,
     int batch,
     int channel,
     int height,

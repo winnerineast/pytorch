@@ -2,6 +2,7 @@
 # Module caffe2.python.layers.sparse_to_dense
 from __future__ import absolute_import, division, print_function, unicode_literals
 
+from collections import defaultdict
 import numpy as np
 from caffe2.python import schema
 from caffe2.python.layers.layers import ModelLayer, AccessedFeatures
@@ -149,7 +150,7 @@ class FeatureSparseToDense(ModelLayer):
         self.output_schema = schema.Struct(*outputs)
 
         # TODO(amalevich): Consider moving this data to schema, instead
-        # Structs doens't support attaching metadata to them and clonning
+        # Structs doesn't support attaching metadata to them and clonning
         # will break things badly, but this is the most elegant way to pass
         # this info around. Should we change it or it'll be too much work and
         # not worse it?
@@ -296,14 +297,16 @@ class FeatureSparseToDense(ModelLayer):
         return metadata
 
     def get_accessed_features(self):
-        accessed_features = {}
+        accessed_features = defaultdict(list)
 
         # The features that are accessed are just those features that appear in
         # the input specs
         for field, feature_specs in self.input_specs:
-            accessed_features[field] = AccessedFeatures(
-                feature_specs.feature_type,
-                set(feature_specs.feature_ids)
+            accessed_features[field].append(
+                AccessedFeatures(
+                    feature_specs.feature_type,
+                    set(feature_specs.feature_ids)
+                )
             )
 
         return accessed_features

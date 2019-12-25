@@ -15,60 +15,54 @@ Sections start with a reference to the source file where the code related to the
 ## Table of Contents
 
 - [JIT Technical Overview](#jit-technical-overview)
-  * [Table of Contents](#table-of-contents)
+  - [Table of Contents](#table-of-contents)
 - [Core Program Representation](#core-program-representation)
-  * [Modules](#modules)
-  * [Parameters](#parameters)
-  * [Method](#method)
-  * [FunctionSchema](#functionschema)
-  * [Graph](#graph)
-  * [Node](#node)
-  * [Block](#block)
-    + [If](#if)
-    + [Loops](#loops)
-  * [Value](#value)
-  * [Type](#type)
+  - [Modules](#modules)
+  - [Parameters](#parameters)
+  - [Method](#method)
+  - [FunctionSchema](#functionschema)
+  - [Graph](#graph)
+  - [Node](#node)
+  - [Block](#block)
+    - [If](#if)
+    - [Loops](#loops)
+  - [Value](#value)
+  - [Type](#type)
 - [Generating Programs](#generating-programs)
-  * [Tracer](#tracer)
-  * [Script](#script)
-  * [Tree](#tree)
-  * [Tree Views](#tree-views)
-  * [frontend.py](#frontendpy)
-  * [Lexer](#lexer)
-  * [Tokens](#tokens)
-  * [Parser](#parser)
-  * [Compiler](#compiler)
-  * [SugaredValue](#sugaredvalue)
-  * [Resolver](#resolver)
-  * [Environment](#environment)
-  * [Python-Compiler Interaction](#python-compiler-interaction)
+  - [Tracer](#tracer)
+  - [Script](#script)
+  - [Tree](#tree)
+  - [Tree Views](#tree-views)
+  - [frontend.py](#frontendpy)
+  - [Lexer](#lexer)
+  - [Tokens](#tokens)
+  - [Parser](#parser)
+  - [Compiler](#compiler)
+  - [SugaredValue](#sugaredvalue)
+  - [Resolver](#resolver)
+  - [Environment](#environment)
+  - [Python-Compiler Interaction](#python-compiler-interaction)
 - [Executing Programs](#executing-programs)
-  * [Evaluation Semantics](#evaluation-semantics)
-  * [IValue](#ivalue)
-  * [Operation](#operation)
-  * [Operator](#operator)
-  * [Interpreter](#interpreter)
-  * [Graph Executor](#graph-executor)
-  * [DifferentiableGraphOp](#differentiablegraphop)
-  * [Interpreter](#interpreter-1)
-  * [FusionGroup](#fusiongroup)
-  * [Handling Mutability](#handling-mutability)
-    + [Aliasing and mutation in the PyTorch API](#aliasing-and-mutation-in-the-pytorch-api)
-    + [Aliasing and mutation annotations in FunctionSchema](#aliasing-and-mutation-annotations-in-functionschema)
-    + [Alias Analysis in the IR](#alias-analysis-in-the-ir)
-    + [Writing optimization passes with `AliasDb`](#writing-optimization-passes-with--aliasdb-)
+  - [Evaluation Semantics](#evaluation-semantics)
+  - [IValue](#ivalue)
+  - [Operation](#operation)
+  - [Operator](#operator)
+  - [Interpreter](#interpreter)
+  - [Graph Executor](#graph-executor)
+  - [JIT Logging](#jit-logging)
+  - [DifferentiableGraphOp](#differentiablegraphop)
+  - [Interpreter](#interpreter-1)
+  - [FusionGroup](#fusiongroup)
+  - [Handling Mutability](#handling-mutability)
+    - [Aliasing and mutation in the PyTorch API](#aliasing-and-mutation-in-the-pytorch-api)
+    - [Aliasing and mutation annotations in FunctionSchema](#aliasing-and-mutation-annotations-in-functionschema)
+    - [Alias Analysis in the IR](#alias-analysis-in-the-ir)
+    - [Writing optimization passes with AliasDb](#writing-optimization-passes-with-aliasdb)
 - [Profiling Programs](#profiling-programs)
 - [Saving Programs](#saving-programs)
-  * [PythonPrint](#pythonprint)
-  * [Serialization](#serialization)
-    + [Overview](#overview)
-    + [`model.json`](#-modeljson-)
-    + [`code`](#-code-)
-    + [`tensors/`](#-tensors--)
-    + [`attributes.pkl`](#-attributespkl-)
-    + [Implementation Details](#implementation-details)
 - [Testing Programs](#testing-programs)
-  * [Test Autodiff](#testautodiff)
+  - [Test Autodiff](#test-autodiff)
+  - [Python Printer](#python-printer)
 - [Python Bindings](#python-bindings)
 
 
@@ -76,7 +70,7 @@ Sections start with a reference to the source file where the code related to the
 
 ## Modules ##
 
-[script/module.h](script/module.h)
+[script/module.h](../script/module.h)
 
 At the top level, all TorchScript programs are represented as a Module. Modules contain:
 
@@ -88,13 +82,13 @@ This mirrors the `nn.Module` objects used in Python. All TorchScript code is a m
 
 ## Parameters ##
 
-[script/module.h](script/module.h)
+[script/module.h](../script/module.h)
 
 Modules contain Parameter objects, which simply hold a "slot" where a Tensor can be placed. These tensors are accessible by the Methods of the Module or the parent Module.
 
 ## Method ##
 
-[script/module.h](script/module.h)
+[script/module.h](../script/module.h)
 
 A Method is a piece of TorchScript code that takes a number of arguments and produces an output value. Methods have several subcomponents. A FunctionSchema describes the types and names of the input arguments and return value. A list of `member_inputs` describes which Parameters are accessed by the method (this is blank for pure functions). A Graph object describes the actual code inside the method. The Method also maintains a GraphExecutor which is used to actually execute the Graph that defines the method.
 
@@ -104,13 +98,13 @@ Methods also contain helper functions for inserting calls to the Method from oth
 
 ## FunctionSchema ##
 
-[aten/src/ATen/core/function_schema.h](../../../aten/src/ATen/core/function_schema.h)
+[aten/src/ATen/core/function_schema.h](../../../../aten/src/ATen/core/function_schema.h)
 
 Each Method has a FunctionSchema that describes the Types of the arguments and return values of a function. Operators (builtin primitives that are called by the Interpreter) also have FunctionSchema. FunctionSchema are analogous to a function _declaration_ in C++. They describe how to call the function but do not provide an implementation.
 
 ## Graph ##
 
-[ir.h](ir.h)
+[ir.h](../ir.h)
 
 Graphs are the root of the intermediate representation (IR) used to define the implementation of TorchScript functions. If you are familiar with [LLVM](llvm.org), they are analogous to an `llvm::Function` object. A Graph is composed of Nodes, Blocks, and Values. Nodes are instructions (e.g. do a matrix multiply). Nodes are organized into Blocks of sequentially executed Nodes. Each Node produces a list of output Values, and also consumes a list of input Values. As an example, a user may write the following TorchScript code:
 
@@ -159,7 +153,7 @@ Because Graph owns all its Nodes, Values, and Blocks, these values are always pa
 
 ## Node ##
 
-[ir.h](ir.h)
+[ir.h](../ir.h)
 
 A node represents a single built-in instruction such as a matrix multiply or a convolution. Each node has a `kind()` method that determines which builtin instruction the node represents. Different nodes (e.g. conv vs matrix-multiply) are represented using different kinds and not via subclassing of Node, as one would find in LLVM. A `kind()` is a `Symbol` object, which is just an "interned" string inside some namespace. Symbols can be created from strings, e.g. through `Symbol::fromQualString("aten::add")`, so there is not a closed set of `kind()` values that a Node might have. This design was chosen to allow the open registration of new operators and user-defined operators.
 
@@ -192,7 +186,7 @@ Attributes are _rarely used_. Operators like convolution or matrix-multiply have
 
 ## Block ##
 
-[ir.h](ir.h)
+[ir.h](../ir.h)
 
 Nodes are organized into sequentially executed lists inside a Block. A Node is a member of precisely one Block. The Graph itself has a top-level `graph.block()`, and control-flow nodes (`prim::If` and `prim::Loop`) also have sub-blocks. While it is possible to design a Graph representation that does not have a sequential order for nodes (i.e. a sea-of-nodes representation), we find it is much easier to debug and understand Blocks when there is a specific canonical order for all of the nodes. This does not preclude optimization passes from changing the order when it would improve performance, and the interpreter is potentially allowed to execute the block out-of-order if the re-ordering preserves the semantics much like an out-of-order processor. Having the ordering ensure that graphs can always be easily printed, and that we can easily step through the execution of a graph.
 
@@ -314,7 +308,7 @@ graph(%z.1 : Dynamic):
 
 ## Value ##
 
-[ir.h](ir.h)
+[ir.h](../ir.h)
 
 A Value represents data flowing through the operations in the program, e.g. the output of a matrix-multiply op. Value objects are always defined by a single Node (`v.node()`) due to single-static assignment form. For inputs to a Block/Graph, this node is a special `prim::Param` node that does not appear anywhere in the block's list of nodes. Value objects also have a Type (e.g. is it a tensor? a list? a tuple?) that provides a static guarantee that its value will be of that Type.
 
@@ -325,13 +319,12 @@ Values are abstract representation of data in the program. When executing, the a
 
 ## Type ##
 
-[aten/src/ATen/core/jit_type.h](../../../aten/src/ATen/core/jit_type.h)
+[aten/src/ATen/core/jit_type.h](../../../../aten/src/ATen/core/jit_type.h)
 
 TorchScript, unlike Python, is statically typed, so every Value has a Type associated with it, and every FunctionSchema has a list of argument types and a return type for a function. Type is the base class of a hierarchy of C++ objects that represent the built-in types of TorchScript. Types provide methods such as `Type::isSubtypeOf` that describe the typing relationships. Common type are:
 
-* TensorType - the root type of all Tensors in the system.
-* DimensionedTensorType - a tensor with a particular number of dimension and backend (e.g. a 4 dimensional cuda Tensor), a subtype of TensorType that only appears after shape analysis.
-* CompleteTensorType - A subtype of DimensionedTensorType that adds fixed sizes (e.g. a [3 x 4] cuda tensor). This only appears from tracing at the moment.
+* TensorType - a tensor with optionally refined information. It may optional know its device, type, requires_grad state, the number of dimensions.
+  If it does know the number of dimensions it may optionally know the size of a particular dimension.
 * Tuples - e.g. Tuple[Tensor, Int]. Each member of the tuple is statically typed and the length of the tuple is statically known.
 * List[T] - e.g. List[Tensor]. Mutable lists of a particular type.
 * Optional[T] - e.g. Optional[Tensor], either the Tensor value or None.
@@ -347,17 +340,17 @@ JIT programs are created using either the tracing frontend (`torch.jit.trace`) o
 ## Tracer ##
 
 
-[tracer.h](tracer.h)
-[tracer_state.h](tracer_state.h)
+[tracer.h](../tracer.h)
+[tracer_state.h](../tracer_state.h)
 
 The tracer produces graphs by recording what actual operations are done on tensors.
 The entry point from Python into C++ for tracing using `torch.jit.trace` is `_create_method_from_trace`.
 
-A thread local instance of the TracingState object maintains a mapping between actual data being computing during the trace (e.g. Tensors) stored in IValues, and the abstract `Value*` in the Graph that would compute that value. The functions `void setValueTrace(const IValue&, Value*)` and `Value* getValueTrace(const IValue&)` are used by the tracer to maintain this mapping.
+A thread local instance of the TracingState object maintains a mapping between actual data being computed during the trace (e.g. Tensors) stored in IValues, and the abstract `Value*` in the Graph that would compute that value. The functions `void setValueTrace(const IValue&, Value*)` and `Value* getValueTrace(const IValue&)` are used by the tracer to maintain this mapping.
 
 An initial IValue to Value mapping is setup up between the inputs to the function being traced and symbolic Value inputs to the Graph being constructed. If we are tracing a `torch.nn.Module`, the tracer also adds Parameters and sub-Modules to the Module being constructed that correspond to the Python `torch.nn.Module` being traced.  These values are also added as mapping so that uses of the Parameters in the trace will create uses of the Parameters in the Graph.
 
-As the trace runs, individual operators create Nodes in the Graph being traced to record what happens. This code is currently generated per operator in [tools/autograd/gen_variable_type.py](../../../tools/autograd/gen_variable_type.py). It results in code that looks like the following:
+As the trace runs, individual operators create Nodes in the Graph being traced to record what happens. This code is currently generated per operator in [tools/autograd/gen_variable_type.py](../../../../tools/autograd/gen_variable_type.py). It results in code that looks like the following:
 
 ```cpp
 torch::jit::Node* node = nullptr;
@@ -385,7 +378,7 @@ The functions `addInputs` and `addOutput` are overloaded to handle the different
 
 Currently set/getValueTrace only works on Tensors and Futures. Other types are not natively traced. Instead aggregates like tuples or lists are often flattened into tensors at the end of a trace and explicitly constructed from individual tensors at the beginning of this trace.
 
-The tracer has special behavior when tracing calls to other TorchScript functions. This behavior is implemented in the GraphExecutor right before a Graph is about to be run. If tracing is enabled while running the graph, the GraphExecutor will disable tracing, run the graph as normal, and then inline the Graph into the trace. It then hooks up the IValues computed by running the Graph to inlined Graph's out Values in the inlined graph.
+The tracer has special behavior when tracing calls to other TorchScript functions. This behavior is implemented in the GraphExecutor right before a Graph is about to be run. If tracing is enabled while running the graph, the GraphExecutor will disable tracing, run the graph as normal, and then inline the Graph into the trace. It then hooks up the IValues computed by running the Graph to out Values in the inlined graph.
 
 > *When a trace calls a TorchScript function, that function is preserved as is, meaning that control-flow is preserved.* This makes it possible to "fix" tracing issues by writing the subset of the program that cannot be traced in script and having the trace invoke it.
 
@@ -393,13 +386,13 @@ The resulting Graph created by tracing is installed as the 'forward' method of t
 
 ## Script ##
 
-The script frontend directly converts Python syntax into Modules. Like many compilers this happens in two phases. First, we generate an abstract syntax tree (AST), which is constructed out of Tree objects. The compiler (misnamed, but that is the name of the file) then does semantic analysis on the Tree and lowers it into a Module. We can generate Trees in two ways: (1) using frontend.py, which takes the Python AST and transliterates it into Tree objects, or (2) via the Lexer and Parser which parse python syntax directly.  The Lexer/Parser path may seem redundant but it is crucially important. We need to define builtin functions ([script/builtin_functions.py](script/builtin_functions.py)) when Python is not linked. We allow users to load TorchScript programs directly from strings without Python ([api/include/torch/jit.h](../../api/include/torch/jit.h)). We also use this Python syntax as the serialization format for TorchScript, since it allows us to make changes to our IR without breaking backward compatibility. Furthermore, the Lexer is reused to implement the FunctionSchema parser, which turns FunctionSchema declarations from strings into FunctionSchema objects.
+The script frontend directly converts Python syntax into Modules. Like many compilers this happens in two phases. First, we generate an abstract syntax tree (AST), which is constructed out of Tree objects. The compiler (misnamed, but that is the name of the file) then does semantic analysis on the Tree and lowers it into a Module. We can generate Trees in two ways: (1) using frontend.py, which takes the Python AST and transliterates it into Tree objects, or (2) via the Lexer and Parser which parse python syntax directly.  The Lexer/Parser path may seem redundant but it is crucially important. We need to define builtin functions ([script/builtin_functions.cpp](../script/builtin_functions.cpp)) when Python is not linked. We allow users to load TorchScript programs directly from strings without Python ([api/include/torch/jit.h](../../api/include/torch/jit.h)). We also use this Python syntax as the serialization format for TorchScript, since it allows us to make changes to our IR without breaking backward compatibility. Furthermore, the Lexer is reused to implement the FunctionSchema parser, which turns FunctionSchema declarations from strings into FunctionSchema objects.
 
 The following sections look into each the stages in the script frontend in detail.
 
 ## Tree ##
 
-[script/tree.h](script/tree.h)
+[script/tree.h](../script/tree.h)
 
 Our frontends produce ASTs in the form of Tree objects. Trees are similar to [s-expressions](https://en.wikipedia.org/wiki/S-expression). Leafs (i.e. Atoms) are always strings. Compound trees have a `kind` (e.g `TK_CONST` or `TK_IDENT` defined in lexer.h) and a list of sub-trees.  For instance, the Tree for `z.sigmoid() - (x + y)` is:
 
@@ -424,7 +417,7 @@ Each tree also has a mandatory SourceRange object that describes the range of te
 
 ## Tree Views ##
 
-[script/tree_views.h](script/tree_views.h)
+[script/tree_views.h](../script/tree_views.h)
 
 Trees are easy to construct visualize and traverse, but extracting information from a large compound tree like that of a function definition is unwieldy since it requires numeric indexing. Tree _Views_ are a small layer on top of a tree that make it possible to create and de-structure trees of particular kinds. For example, here is the tree view for the apply node which provides named accessors for its subtrees: the function being called, the inputs, and the attributes (i.e. kwargs):
 
@@ -463,7 +456,7 @@ switch (tree.kind()) {
 
 ## frontend.py ##
 
-[torch/jit/frontend.py](../../jit/frontend.py)
+[torch/jit/frontend.py](../../../jit/frontend.py)
 
 One way we construct Tree objects is directly from Python ASTs. This logic is contained inside frontend.py and is intentionally very minimal.
 
@@ -473,7 +466,7 @@ So this code simply constructs the Tree, filtering out the AST nodes of Python t
 
 ## Lexer ##
 
-[script/lexer.h](script/lexer.h)
+[script/lexer.h](../script/lexer.h)
 
 When loading TorchScript code directly from a string, we using a standard Lexer/Parser combo. The Lexer takes an initial string and then exposes a stateful interface for walking the Tokens of the string, providing a standard set of functions:
 
@@ -494,7 +487,7 @@ We would get a token stream `TK_IF TK_NEWLINE TK_INDENT . TK_NEWLINE . TK_NEWLIN
 
 ## Tokens ##
 
-[script/lexer.h](script/lexer.h)
+[script/lexer.h](../script/lexer.h)
 
 Tokens are either keywords (`def`), operators (`+`), literals (`3.4`), or identifiers (`foo`). A `token_kind` integer identifies what it is and is the exact same type as the `kind` of a Tree. For single-character Tokens (e.g. `+`), the kind is the same as the character, enable statements like:
 
@@ -508,7 +501,7 @@ Multi-character token kinds are defined in a list, `TC_FORALL_TOKEN_KINDS`. Toke
 
 ## Parser ##
 
-[script/parser.h](script/parser.h)
+[script/parser.h](../script/parser.h)
 
 The Parser uses the Lexer to build the AST for function definitions. `parseFunction` is the entrypoint for parsing a single `def ...` and will return a `Def` tree view.
 
@@ -516,7 +509,7 @@ The Parser is written as a [top-down precedence parser](https://eli.thegreenplac
 
 ## Compiler ##
 
-[script/compiler.h](script/compiler.h)
+[script/compiler.h](../script/compiler.h)
 
 The file compiler.cpp translates Trees into Modules. Its name is slightly ambiguous because there are other compiler-like things in the system such as the FusionCompiler. The main entrypoint is `defineMethodsInModule` which takes a list of Def Tree Views representing function definitions and adds them as Methods to the module. During the lowering processing _semantic checking_ occurs. The compiler checks that all used variables are defined (sometimes called scope checking), and that all values have compatible types (type-checking). During this process it also emits the graph nodes corresponding to each statement in the Tree and generates a FunctionSchema for the whole definition.
 
@@ -526,17 +519,17 @@ The Environment tracks the mapping between variable names and the SugaredValues 
 
 ## SugaredValue ##
 
-[script/sugared_value.h](script/sugared_value.h)
+[script/sugared_value.h](../script/sugared_value.h)
 
 SugaredValues are how the compiler represents non-first class values during Graph creation. These values are things like the Module or a python function call that do not have corresponding Value objects in the Graph. The compiler _desugars_ the SugaredValue objects to instructions in the graph based on how they are used.  The SugaredValue class has a number of abstract methods on it such as `attr` or `call`. Consider the expression `self.foo`. For methods, `self` will resolve to a special SugaredValue subclass,  ModuleValue. When the compiler sees `self.foo`, it will then call the ModuleValue function `sv.attr("foo")`, asking the ModuleValue how it should desugar itself when the attribute `"foo"` accessed. If `foo` is a parameter, it would then ensure that the parameter was added to the Method being compiled, and return a `SimpleValue` sugared value that contains the Value object representing the parameter as an input. If `foo` were a sub-Module then it would return another SugaredModule. The method `call` is invoked when the compiler sees the value used as a function call.
 
 SugaredValues are also how we interact with Python runtime during the compilation process. For instance, `math.pi` is resolved to 3.1415... by first resolving `math` to a SugaredValue representing accesses to Python modules (PythonModuleValue) whose `attr` function turns python numbers into  `prim::Constant` Nodes in the graph.
 
-Finally, normal Values are also represented by the SimpleValue SugaredValue in places where it is valid either a SugaredValue or a normal Value to appear.
+Finally, normal Values are also represented by the SimpleValue SugaredValue in places where it is valid that either a SugaredValue or a normal Value will appear.
 
 ## Resolver ##
 
-[script/compiler.h](script/compiler.h)
+[script/compiler.h](../script/compiler.h)
 
 Any undefined variable during compilation is resolved with a call to an externally-provided Resolver. When called from Python (e.g `torch.jit.script`) this resolver interacts with the Python runtime via pybind11 to resolve symbols like `torch` and `math` to their Python equivalents.
 
@@ -546,13 +539,13 @@ This makes it possible to use most of the compiler functionality when python is 
 
 ## Environment ##
 
-[script/compiler.cpp](script/compiler.cpp)
+[script/compiler.cpp](../script/compiler.cpp)
 
 The Environment object tracks the assignment of variable names to SugaredValues during compilation. It is local to the compiler file. A stack of environments exist, with a new environment being created for sub-blocks introduced by control flow. The Environment also handles turning the AST representation into SSA-form by tracking which variables were modified inside a sub-block and inserting the correct inputs/outputs to the Blocks of if-statements and loops.
 
 ## Python-Compiler Interaction ##
 
-[script/init.cpp](script/init.cpp)
+[script/init.cpp](../script/init.cpp)
 
 A set of special SugaredValues are used to translate between objects in the Python environment and Values in the Graph during the compilation process. The entry-point for this behavior is `toSugaredValue(py::object obj, ...)` which takes a pybind11 Python value and figures out how to turn it into an appropriate SugaredValue. Values exist to represent Python functions, Python modules, and ScriptModule objects.
 
@@ -602,7 +595,7 @@ In addition to being mutable, tensors also have a set of dynamically determined 
 * size - the precise size of the tensor
 * requires_grad - whether the tensor is recording its gradient with autograd
 
-Changes in these properties change how operators on tensor will evaluate and would make certain optimization invalid. For instance, if we have fuser capable of generating new cuda kernels but not cpu kernels, it is only valid to fuse operations where the inputs are known to run only on CUDA devices. The GraphExecutor's job is to still enable optimization even when certains combinations of properties prevent optimizations for occurring.
+Changes in these properties change how operators on tensor will evaluate and would make certain optimization invalid. For instance, if we have fuser capable of generating new cuda kernels but not cpu kernels, it is only valid to fuse operations where the inputs are known to run only on CUDA devices. The GraphExecutor's job is to still enable optimization even when certains combinations of properties prevent optimizations from occurring.
 
 Nodes in a graph are executed *serially* in the order they appear in a block. Nodes may be reordered either during optimization or by the interpreter itself if it can be proven that
 it is not distinguishable from the original serial execution order. These semantics are necessary since the combination of mutable tensors and potential alias between tensors makes it unsafe to perform arbitrary reordering otherwise. However, the AliasInfo object can accurately track how alias propagate through builtin operators so optimization passes can query when certain reorders or optimizations are safe.
@@ -627,7 +620,7 @@ Optimization passes that wish to exploit multi-threaded execution may automatica
 
 ## IValue ##
 
-[ivalue.h](../../include/ATen/core/ivalue.h)
+[ivalue.h](../../../include/ATen/core/ivalue.h)
 
 All evaluation involves computation using IValues, a 16-byte tagged union that can hold the concrete representation of any type in TorchScript. TorchScript is statically typed, so it would be possible to operate on unboxed primitive types, but the interface between interpreter, builtin-ops and user functions would be significantly more complicated. A single tagged union keeps these interfaces simple and since more objects are Tensors anyway, the overhead of storing a tag is small compared to the data stored in the tensors.
 
@@ -664,7 +657,7 @@ Operations also return a jump offset relative to the address of the next operato
 
 ## Operator ##
 
-[operator.h](operator.h)
+[operator.h](../operator.h)
 
 The Operator object represents a single registered operator in the system. It combines a FunctionSchema that describes how an Operation executes with a method to lookup the corresponding Operation given the Node representing the operator in a Graph.  Most Operators are defined by providing a FunctionSchema and an Operation function. However, primitives like prim::Unpack require knowledge of their Node to know how to operate (e.g. how many elements to unpack). These Operators have a function that takes a Node* and returns an operation.
 
@@ -741,7 +734,7 @@ graph(%x : Tensor,
 
 ## Graph Executor ##
 
-[graph_executor.cpp](graph_executor.cpp)
+[graph_executor.cpp](../graph_executor.cpp)
 
 All program execution starts with a graph executor. Its responsible for running optimizations (potentially involving the JIT-compilation of fused kernel code), and then handing the Graph or subcomponents of it off to an interpreter to actually run.
 
@@ -798,7 +791,7 @@ graph(%x : Tensor,
   return (%30)
 ```
 
-Execution starts in `GraphExecutor::run`, which takes takes a Stack of inputs.
+Execution starts in `GraphExecutor::run`, which takes a Stack of inputs.
 
 *Specialization* The executor *specializes* the Graph for the particular set of inputs. Specialization is handled by the `ArgumentSpec` object which extracts a "signature" composed of all the properties being specialized. We only specialize to the properties of Tensors. The ArgumentSpec only records properties for Tensors that either appear directly in the inputs to the graph or inside Tuples that are inputs to the Graph. The properties recorded are currently:
 
@@ -811,7 +804,7 @@ Execution starts in `GraphExecutor::run`, which takes takes a Stack of inputs.
 The ArgumentSpec object is used as a key into a cache that holds pre-optimized Code objects (held in an ExecutionPlan object). On a cache hit, an InterpreterState is created and the Code in the cache is run.
 
 
-*Pre-derivative Optimization* On a code cache miss, we generate a new optimized Graph on the fly (`compileSpec`). It starts by creating a copy of the initial Graph and setting the input types to the specialized Tensor types observed in this specialization. TensorType inputs to the Graph will get replaced with their DimensionedTensorType equivalents.
+*Pre-derivative Optimization* On a code cache miss, we generate a new optimized Graph on the fly (`compileSpec`). It starts by creating a copy of the initial Graph and setting the input types to the specialized Tensor types observed in this specialization. TensorType inputs to the Graph will get refined with types that know the device, number of dimensions, and requires grad state.
 
 ```
 # post specialization, inputs are now specialized types
@@ -1027,9 +1020,35 @@ with prim::DifferentiableGraph_0 = graph(%13 : Float(*, *),
   return (%hy, %cy)
 ```
 
+## JIT Logging ##
+
+Logging is a very useful debugging technique, especially in the context of compilers. Compilers perform a series of passes and analyses and logging can help to trace issues such as wrong results or segmentation faults
+all the way back to the original erroneous transformation.
+
+`TorchScript` offers a simple logging facility that can enabled by setting an environment variable `PYTORCH_JIT_LOG_LEVEL`.
+
+Logging is enabled on a per file basis. To enable logging in `dead_code_elimination.cpp`, `PYTORCH_JIT_LOG_LEVEL` should be
+set to `dead_code_elimination.cpp` or, simply, to `dead_code_elimination` (i.e. `PYTORCH_JIT_LOG_LEVEL=dead_code_elimination`).
+
+Multiple files can be logged by separating each file name with a colon `:` as in the following example, `PYTORCH_JIT_LOG_LEVEL=dead_code_elimination:guard_elimination`
+
+There are 3 logging levels available for your use ordered by the detail level from lowest to highest.
+
+* `GRAPH_DUMP` should be used for printing entire graphs after optimization passes
+* `GRAPH_UPDATE` should be used for reporting graph transformations (i.e. node deletion, constant folding, etc)
+* `GRAPH_DEBUG` should be used for providing information useful for debugging
+  the internals of a particular optimization pass or analysis
+
+The current logging level is `GRAPH_UPDATE` meaning that both `GRAPH_DUMP` and `GRAPH_UPDATE` will be enabled when
+one specifies a file(s) in `PYTORCH_JIT_LOG_LEVEL`.
+
+`GRAPH_DEBUG` can be enabled by prefixing a file name with an `>` as in `>alias_analysis`.
+`>>` and `>>>` are also valid and **currently** are equivalent to `GRAPH_DEBUG` as there is no logging level that is
+higher than `GRAPH_DEBUG`.
+
 ## DifferentiableGraphOp ##
 
-[graph_executor.cpp](graph_executor.cpp)
+[graph_executor.cpp](../graph_executor.cpp)
 
 
 A DifferentiableGraphOp combines an explicit forward Graph `f` with a paired backward graph `df`. When it runs, the input Tensors to `f` are detached from the autograd, the body of `f` is run, and then the autograd graph for the outputs of `f` are hooked up to the `df` function. The `df` function's outputs are also hooked up to the autograd graph.
@@ -1148,7 +1167,7 @@ TODO: fusion, operators
 
 # Profiling Programs
 
-`prim::profile` nodes are inserted on every **use** of a value by `ProfilingRecord::instrumentBlock`. Every `prim::profile` node runs a lambda that uses a captured, initial type value and the type of an incoming tensor and merges the two into `ProfiledTensorType`
+`prim::profile` nodes are inserted on every **use** of a value by `ProfilingRecord::instrumentBlock`. Every `prim::profile` node runs a lambda that uses a captured, initial type value and the type of an incoming tensor and merges the two into a refined `TensorType`
 
 `prim::profile` nodes are replaced with `prim::Guard` nodes by `InsertGuards`. `prim::Guard` nodes are inserted to guarantee that beyond the guard a guarded tensor will always be of the profiled shape. This guarantee will enable optimizations and codegens to generate more efficient code.
 
@@ -1163,16 +1182,18 @@ Lastly, JIT needs to be handle cases when the assumptions about tensor shapes fa
 
 # Saving Programs
 
+See [the serialization docs](./serialization.md).
+
 # Testing Programs
 ## Test Autodiff ##
-[symbolic_script.cpp](symbolic_script.cpp)
+[symbolic_script.cpp](../symbolic_script.cpp)
 
 When differentiating a graph, each node that has a symbolic gradient will be included in a `prim::DifferentiableGraph`. We fall back to use autograd for the node if there isn't a gradient formula for it.
 Adding/updating symbolic gradient functions must be tested carefully as it's easy to get CI green by comparing autograd result with itself, but potentially cause autodiff support regression.
 
 If your PR adds/updates a gradient formula for `torch`/`nn` functions, you **MUST** enable/update the corresponding tests in
-- `torch` functions: `method_tests` in [common_method_tests.py](../../../test/common_method_tests.py)
-- `nn` functions: `nn_functional_tests` in [test_jit.py](../../../test/test_jit.py)
+- `torch` functions: `method_tests` in [common_method_tests.py](../../../../test/common_method_tests.py)
+- `nn` functions: `nn_functional_tests` in [test_jit.py](../../../../test/test_jit.py)
 
 To turn on autodiff check, you can add an optional `check_ad(should_check_autodiff[bool], nonfusible_nodes[str|list[str]], fusible_nodes[str|list[str]])` tuple after the optional test variant name field.
 If `should_check_autodiff=True`, the differentiated traced/script forward graph must have a `prim::DifferentiableGraph`.
@@ -1191,15 +1212,15 @@ To make writing test easier, you only need to write out node names if it's diffe
 ```
 
 Note that even for the same function, different tests could trigger different function schemas (e.g `aten::add`) while only a few of them have symbolic gradient formulas.
-You should only turn on autodiff check in tests who have symbolic gradient. If you are not sure, uncomment the debugging line in [symbolic_script.cpp](symbolic_script.cpp)
+You should only turn on autodiff check in tests who have symbolic gradient. If you are not sure, uncomment the debugging line in [symbolic_script.cpp](../symbolic_script.cpp)
 to check which function schema the test triggers.
 
 ## Python Printer
 
-[python_print.cpp](python_print.cpp)
-[import_source.cpp](import_source.cpp)
+[python_print.cpp](../python_print.cpp)
+[import_source.cpp](../import_source.cpp)
 
-The Python Printer takes a `Graph` and produces Python-like code that represents the same graph. Using some special values in [import_source.cpp](import_source.cpp), this code can be read back in by the compiler to produce the same `Graph`. In Python a `ScriptModule`'s `code` property shows the Python Printed graph.
+The Python Printer takes a `Graph` and produces Python-like code that represents the same graph. Using some special values in [import_source.cpp](../import_source.cpp), this code can be read back in by the compiler to produce the same `Graph`. In Python a `ScriptModule`'s `code` property shows the Python Printed graph.
 
 The table below shows the graph and code for this small `ScriptModule`:
 ```python

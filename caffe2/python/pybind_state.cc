@@ -26,6 +26,7 @@
 #include "caffe2/opt/onnxifi_transformer.h"
 #include "caffe2/opt/optimize_ideep.h"
 #include "caffe2/opt/passes.h"
+#include "caffe2/opt/shape_info.h"
 #include "caffe2/predictor/emulator/data_filler.h"
 #include "caffe2/predictor/predictor.h"
 #include "caffe2/python/pybind_state_registry.h"
@@ -93,12 +94,12 @@ REGISTER_BLOB_FETCHER((TypeMeta::Id<string>()), StringFetcher);
 class ScriptModuleFetcher : public BlobFetcherBase {
  public:
   pybind11::object Fetch(const Blob& blob) override {
-    return py::cast(blob.Get<torch::jit::script::Module>());
+    return py::cast(*blob.Get<std::unique_ptr<torch::jit::script::Module>>());
   }
 };
 
 REGISTER_BLOB_FETCHER(
-    (TypeMeta::Id<torch::jit::script::Module>()),
+    (TypeMeta::Id<std::unique_ptr<torch::jit::script::Module>>()),
     caffe2::python::ScriptModuleFetcher);
 #endif
 
@@ -247,7 +248,8 @@ bool feedBlob(
   }
 #ifdef FBCODE_CAFFE2
   if (auto module = torch::jit::script::as_module(arg)) {
-    *blob->GetMutable<torch::jit::script::Module>() = *module;
+    blob->GetMutable<std::unique_ptr<torch::jit::script::Module>>()->reset(
+        new torch::jit::script::Module(*module));
     return true;
   }
 #endif
@@ -428,7 +430,8 @@ void addObjectMethods(py::module& m) {
         auto p = c10::intrusive_ptr<c10::TensorImpl, at::UndefinedTensorImpl>::
             unsafe_reclaim_from_nonowning(static_cast<c10::TensorImpl*>(ptr));
         TORCH_CHECK(p.defined(), "Can't wrap undefined tensor");
-        TORCH_CHECK(!p->requires_grad(), "Can wrap only non-requires-grad tensor");
+        TORCH_CHECK(
+            !p->requires_grad(), "Can wrap only non-requires-grad tensor");
         auto at_tensor = at::Tensor::wrap_tensor_impl(std::move(p));
         BlobSetTensor(blob, Tensor(std::move(at_tensor)));
       });
@@ -1526,6 +1529,12 @@ void addGlobalMethods(py::module& m) {
     CAFFE_ENFORCE(gWorkspace->CreateBlob(name));
     return true;
   });
+  m.def("reset_blob", [](const std::string& name) {
+    CAFFE_ENFORCE(gWorkspace);
+    auto* b = gWorkspace->GetBlob(name);
+    CAFFE_ENFORCE(b);
+    b->Reset();
+  });
   m.def("fetch_blob", [](const std::string& name) -> py::object {
     return python_detail::fetchBlob(gWorkspace, name);
   });
@@ -1702,6 +1711,7 @@ void addGlobalMethods(py::module& m) {
       [](const py::bytes& pred_net_str,
          const std::unordered_map<std::string, std::vector<int>>& shapes,
          const std::vector<int>& black_list,
+         const std::vector<std::string>& weight_names,
          int max_batch_size,
          int max_seq_size,
          bool adjust_batch,
@@ -1712,10 +1722,12 @@ void addGlobalMethods(py::module& m) {
             ParseProtoFromLargeString(
                 pred_net_str.cast<std::string>(), &pred_net),
             "broken pred_net protobuf");
-        std::unordered_map<std::string, TensorShape> tensor_shapes;
+        ShapeInfoMap shape_map;
         for (const auto& it : shapes) {
-          tensor_shapes.emplace(
-              it.first, CreateTensorShape(it.second, TensorProto::FLOAT));
+          shape_map.emplace(
+              it.first,
+              constructShapeInfoWithDefaultDimType(
+                  CreateTensorShape(it.second, TensorProto::FLOAT)));
         }
         OnnxifiTransformerOptions opts;
         opts.bound_shape_spec.max_batch_size = max_batch_size;
@@ -1727,9 +1739,18 @@ void addGlobalMethods(py::module& m) {
         Workspace* curr_ws = GetCurrentWorkspace();
         std::unordered_set<int> blacklist_set(
             black_list.begin(), black_list.end());
-        auto weight_names = curr_ws->Blobs();
+        std::vector<std::string> weight_names_overwrite{};
+        if (weight_names.size() == 0) {
+          weight_names_overwrite = curr_ws->Blobs();
+        } else {
+          weight_names_overwrite = weight_names;
+        }
         ts.transform(
-            curr_ws, &pred_net, weight_names, tensor_shapes, blacklist_set);
+            curr_ws,
+            &pred_net,
+            weight_names_overwrite,
+            shape_map,
+            blacklist_set);
         std::string pred_net_str2;
         pred_net.SerializeToString(&pred_net_str2);
         return py::bytes(pred_net_str2);

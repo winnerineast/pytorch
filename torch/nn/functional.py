@@ -8,7 +8,6 @@ import torch
 from torch._C import _infer_size, _add_docstr
 from . import _reduction as _Reduction
 from .modules import utils
-from ._functions import vision
 from .modules.utils import _single, _pair, _triple, _list_with_default
 from . import grad  # noqa: F401
 from . import _VF
@@ -340,7 +339,8 @@ def fractional_max_pool2d_with_indices(input, kernel_size, output_size=None,
         raise ValueError("fractional_max_pool2d requires specifying either "
                          "an output_size or an output_ratio")
     if output_size is None:
-        _output_ratio = _pair(torch.jit._unwrap_optional(output_ratio))
+        assert output_ratio is not None
+        _output_ratio = _pair(output_ratio)
         output_size = [int(input.size(2) * _output_ratio[0]),
                        int(input.size(3) * _output_ratio[1])]
 
@@ -405,7 +405,8 @@ def fractional_max_pool3d_with_indices(input, kernel_size, output_size=None,
         raise ValueError("fractional_max_pool3d requires specifying either "
                          "an output_size or an output_ratio")
     if output_size is None:
-        _output_ratio = _triple(torch.jit._unwrap_optional(output_ratio))
+        assert output_ratio is not None
+        _output_ratio = _triple(output_ratio)
         output_size = [int(input.size(2) * _output_ratio[0]),
                        int(input.size(3) * _output_ratio[1]),
                        int(input.size(4) * _output_ratio[2])]
@@ -1116,7 +1117,7 @@ def gelu(input):
     r"""gelu(input) -> Tensor
 
     Applies element-wise the function
-    :math:`\text{GeLU}(x) = x * \Phi(x)`
+    :math:`\text{GELU}(x) = x * \Phi(x)`
 
     where :math:`\Phi(x)` is the Cumulative Distribution Function for Gaussian Distribution.
 
@@ -1159,6 +1160,13 @@ def softsign(input):
 
 softplus = _add_docstr(torch._C._nn.softplus, r"""
 softplus(input, beta=1, threshold=20) -> Tensor
+
+Applies element-wise, the function :math:`\text{Softplus}(x) = \frac{1}{\beta} * \log(1 + \exp(\beta * x))`.
+
+For numerical stability the implementation reverts to the linear function
+for inputs above :attr:`threshold` (default ``20``).
+
+See :class:`~torch.nn.Softplus` for more details.
 """)
 
 
@@ -1278,14 +1286,14 @@ def gumbel_softmax(logits, tau=1, hard=False, eps=1e-10, dim=-1):
     if eps != 1e-10:
         warnings.warn("`eps` parameter is deprecated and has no effect.")
 
-    gumbels = -torch.empty_like(logits).exponential_().log()  # ~Gumbel(0,1)
+    gumbels = -torch.empty_like(logits, memory_format=torch.legacy_contiguous_format).exponential_().log()  # ~Gumbel(0,1)
     gumbels = (logits + gumbels) / tau  # ~Gumbel(logits,tau)
     y_soft = gumbels.softmax(dim)
 
     if hard:
         # Straight through.
         index = y_soft.max(dim, keepdim=True)[1]
-        y_hard = torch.zeros_like(logits).scatter_(dim, index, 1.0)
+        y_hard = torch.zeros_like(logits, memory_format=torch.legacy_contiguous_format).scatter_(dim, index, 1.0)
         ret = y_hard - y_soft.detach() + y_soft
     else:
         # Reparametrization trick.
@@ -1377,6 +1385,22 @@ def linear(input, weight, bias=None):
 
 def bilinear(input1, input2, weight, bias=None):
     # type: (Tensor, Tensor, Tensor, Optional[Tensor]) -> Tensor
+    r"""
+    Applies a bilinear transformation to the incoming data:
+    :math:`y = x_1 A x_2 + b`
+
+    Shape:
+
+        - input1: :math:`(N, *, H_{in1})` where :math:`H_{in1}=\text{in1\_features}`
+          and :math:`*` means any number of additional dimensions.
+          All but the last dimension of the inputs should be the same.
+        - input2: :math:`(N, *, H_{in2})` where :math:`H_{in2}=\text{in2\_features}`
+        - weight: :math:`(\text{out\_features}, \text{in1\_features},
+          \text{in2\_features})`
+        - bias: :math:`(\text{out\_features})`
+        - output: :math:`(N, *, H_{out})` where :math:`H_{out}=\text{out\_features}`
+          and all but the last dimension are the same shape as the input.
+    """
     return torch.bilinear(input1, input2, weight, bias)
 
 
@@ -1570,7 +1594,6 @@ def embedding_bag(input, weight, offsets=None, max_norm=None, norm_type=2,
     elif input.dim() == 1:
         if offsets is None:
             raise ValueError("offsets has to be a 1D Tensor but got None")
-        offsets = torch.jit._unwrap_optional(offsets)
         if offsets.dim() != 1:
             raise ValueError("offsets has to be a 1D Tensor")
         if int(offsets[0]) != 0:
@@ -1584,7 +1607,6 @@ def embedding_bag(input, weight, offsets=None, max_norm=None, norm_type=2,
     else:
         raise ValueError("input has to be 1D or 2D Tensor,"
                          " but got Tensor of dimension {}".format(input.dim()))
-    offsets = torch.jit._unwrap_optional(offsets)  # TODO remove when exception control flow logic
     if mode == 'sum':
         mode_enum = 0
     elif mode == 'mean':
@@ -1599,7 +1621,6 @@ def embedding_bag(input, weight, offsets=None, max_norm=None, norm_type=2,
             raise ValueError("max mode does not support sparse weights")
 
     else:
-        mode_enum = -1  # TODO when exception control flow logic
         raise ValueError("mode has to be one of sum, mean or max")
 
     if max_norm is not None:
@@ -1832,8 +1853,17 @@ def nll_loss(input, target, weight=None, size_average=None, ignore_index=-100,
         if target.size()[1:] != input.size()[2:]:
             raise ValueError('Expected target size {}, got {}'.format(
                 out_size, target.size()))
-        input = input.contiguous().view(n, c, 1, -1)
-        target = target.contiguous().view(n, 1, -1)
+        input = input.contiguous()
+        target = target.contiguous()
+        # support empty batches, see #15870
+        if input.numel() > 0:
+            input = input.view(n, c, 1, -1)
+        else:
+            input = input.view(n, c, 0, 0)
+        if target.numel() > 0:
+            target = target.view(n, 1, -1)
+        else:
+            target = target.view(n, 0, 0)
         reduction_enum = _Reduction.get_enum(reduction)
         if reduction != 'none':
             ret = torch._C._nn.nll_loss2d(
@@ -1924,6 +1954,9 @@ def kl_div(input, target, size_average=None, reduce=None, reduction='mean'):
         :attr:``reduction`` = ``'mean'`` doesn't return the true kl divergence value, please use
         :attr:``reduction`` = ``'batchmean'`` which aligns with KL math definition.
         In the next major release, ``'mean'`` will be changed to be the same as 'batchmean'.
+
+    .. _Kullback-Leibler divergence:
+        https://en.wikipedia.org/wiki/Kullback-Leibler_divergence
     """
     if size_average is not None or reduce is not None:
         reduction_enum = _Reduction.legacy_get_enum(size_average, reduce)
@@ -2362,12 +2395,13 @@ def upsample(input, size=None, scale_factor=None, mode='nearest', align_corners=
             ``'trilinear'``. Default: ``'nearest'``
         align_corners (bool, optional): Geometrically, we consider the pixels of the
             input and output as squares rather than points.
-            If set to ``False``, the input and output tensors are aligned by the
-            center points of their corner pixels. If set to ``True``, the input and
-            output tensors are aligned by the corner points of their corner
-            pixels, and the interpolation uses edge value padding for out-of-boundary values.
-            This only has effect when :attr:`mode` is ``'linear'``,
-            ``'bilinear'``, ``'bicubic'`` or ``'trilinear'``.
+            If set to ``True``, the input and output tensors are aligned by the
+            center points of their corner pixels, preserving the values at the corner pixels.
+            If set to ``False``, the input and output tensors are aligned by the corner
+            points of their corner pixels, and the interpolation uses edge value padding
+            for out-of-boundary values, making this operation *independent* of input size
+            when :attr:`scale_factor` is kept the same. This only has an effect when :attr:`mode`
+            is ``'linear'``, ``'bilinear'``, ``'bicubic'`` or ``'trilinear'``.
             Default: ``False``
 
     .. note::
@@ -2390,7 +2424,7 @@ def upsample(input, size=None, scale_factor=None, mode='nearest', align_corners=
     return interpolate(input, size, scale_factor, mode, align_corners)
 
 
-def interpolate(input, size=None, scale_factor=None, mode='nearest', align_corners=None):
+def interpolate(input, size=None, scale_factor=None, mode='nearest', align_corners=None, use_scale_factor=None):
     r"""Down/up samples the input to either the given :attr:`size` or the given
     :attr:`scale_factor`
 
@@ -2415,12 +2449,21 @@ def interpolate(input, size=None, scale_factor=None, mode='nearest', align_corne
             ``'trilinear'`` | ``'area'``. Default: ``'nearest'``
         align_corners (bool, optional): Geometrically, we consider the pixels of the
             input and output as squares rather than points.
-            If set to ``False``, the input and output tensors are aligned by the
-            center points of their corner pixels. If set to ``True``, the input and
-            output tensors are aligned by the corner points of their corner
-            pixels, and the interpolation uses edge value padding for out-of-boundary values.
-            This only has effect when :attr:`mode` is ``'linear'``,
-            ``'bilinear'``, ``'bicubic'``, or ``'trilinear'``.
+            If set to ``True``, the input and output tensors are aligned by the
+            center points of their corner pixels, preserving the values at the corner pixels.
+            If set to ``False``, the input and output tensors are aligned by the corner
+            points of their corner pixels, and the interpolation uses edge value padding
+            for out-of-boundary values, making this operation *independent* of input size
+            when :attr:`scale_factor` is kept the same. This only has an effect when :attr:`mode`
+            is ``'linear'``, ``'bilinear'``, ``'bicubic'`` or ``'trilinear'``.
+            Default: ``False``
+        use_scale_factor (bool, optional): When scale_factor is passed as a parameter, it can be
+            directly used in the output computation, or can be used to compute the output size which
+            will later be used to infer new scales values. In the second case, the value of the scales
+            used in the interpolation can be different than the ones specified by the user for non integer
+            values of scale_factor (due to floating point precision).
+            If set to ``True``, scale_factor is used in the interpolation.
+            If set to ``False``, the output_size is computed and new scales are infered for the interpolation.
             Default: ``False``
 
     .. note::
@@ -2438,6 +2481,14 @@ def interpolate(input, size=None, scale_factor=None, mode='nearest', align_corne
         See :class:`~torch.nn.Upsample` for concrete examples on how this
         affects the outputs.
 
+        When scale_factor is specified, if use_scale_factor=False,
+        scale_factor is used to compute the output_size which will then
+        be used to infer new scales for the interpolation. This is the current
+        default behavior when use_scale_factor is not specified.
+        The default behavior for use_scale_factor will change to True
+        in 1.5.0, and scale_factor will be used in the interpolation
+        calculation.
+
     .. include:: cuda_deterministic_backward.rst
     """
     from .modules.utils import _ntuple
@@ -2451,6 +2502,16 @@ def interpolate(input, size=None, scale_factor=None, mode='nearest', align_corne
                 and len(scale_factor) != dim:
             raise ValueError('scale_factor shape must match input shape. '
                              'Input is {}D, scale_factor size is {}'.format(dim, len(scale_factor)))
+        if scale_factor is not None and use_scale_factor is None:
+            # only warn when the scales have floating values since
+            # the result for ints is the same with/without use_scale_factor
+            is_float_scale_factor = any(not float(scale).is_integer() for scale in _ntuple(dim)(scale_factor))
+            if is_float_scale_factor:
+                warnings.warn("The default behavior for interpolate/upsample with float scale_factor will change "
+                              "in 1.5.0 to align with other frameworks/libraries, and use scale_factor directly, "
+                              "instead of relying on the computed output size. "
+                              "If you wish to keep the old behavior, please set use_scale_factor=False. "
+                              "See the documentation of nn.Upsample for details. ")
 
     def _output_size(dim):
         _check_size_scale_factor(dim)
@@ -2461,9 +2522,17 @@ def interpolate(input, size=None, scale_factor=None, mode='nearest', align_corne
 
         # make scale_factor a tensor in tracing so constant doesn't get baked in
         if torch._C._get_tracing_state():
-            return [(torch.floor((input.size(i + 2) * torch.tensor(float(scale_factors[i]))).float())) for i in range(dim)]
+            return [(torch.floor((input.size(i + 2).float() * torch.tensor(scale_factors[i],
+                     dtype=torch.float32)).float())) for i in range(dim)]
         else:
             return [int(math.floor(float(input.size(i + 2)) * scale_factors[i])) for i in range(dim)]
+
+    def _scale_factors(dim):
+        scale_factor_len = dim - 2
+        scale_factor_list = _ntuple(scale_factor_len)(-1)
+        if scale_factor is not None and use_scale_factor:
+            scale_factor_list = _ntuple(scale_factor_len)(scale_factor)
+        return scale_factor_list
 
     if mode in ('nearest', 'area'):
         if align_corners is not None:
@@ -2477,12 +2546,15 @@ def interpolate(input, size=None, scale_factor=None, mode='nearest', align_corne
                           "See the documentation of nn.Upsample for details.".format(mode))
             align_corners = False
 
+    scale_factor_list = _scale_factors(input.dim())
+
     if input.dim() == 3 and mode == 'nearest':
-        return torch._C._nn.upsample_nearest1d(input, _output_size(1))
+        return torch._C._nn.upsample_nearest1d(input, _output_size(1), scale_factor_list[0])
     elif input.dim() == 4 and mode == 'nearest':
-        return torch._C._nn.upsample_nearest2d(input, _output_size(2))
+        return torch._C._nn.upsample_nearest2d(input, _output_size(2), scale_factor_list[0], scale_factor_list[1])
     elif input.dim() == 5 and mode == 'nearest':
-        return torch._C._nn.upsample_nearest3d(input, _output_size(3))
+        return torch._C._nn.upsample_nearest3d(input, _output_size(3),
+                                               scale_factor_list[0], scale_factor_list[1], scale_factor_list[2])
     elif input.dim() == 3 and mode == 'area':
         return adaptive_avg_pool1d(input, _output_size(1))
     elif input.dim() == 4 and mode == 'area':
@@ -2490,7 +2562,7 @@ def interpolate(input, size=None, scale_factor=None, mode='nearest', align_corne
     elif input.dim() == 5 and mode == 'area':
         return adaptive_avg_pool3d(input, _output_size(3))
     elif input.dim() == 3 and mode == 'linear':
-        return torch._C._nn.upsample_linear1d(input, _output_size(1), align_corners)
+        return torch._C._nn.upsample_linear1d(input, _output_size(1), align_corners, scale_factor_list[0])
     elif input.dim() == 3 and mode == 'bilinear':
         raise NotImplementedError("Got 3D input, but bilinear mode needs 4D input")
     elif input.dim() == 3 and mode == 'trilinear':
@@ -2498,7 +2570,7 @@ def interpolate(input, size=None, scale_factor=None, mode='nearest', align_corne
     elif input.dim() == 4 and mode == 'linear':
         raise NotImplementedError("Got 4D input, but linear mode needs 3D input")
     elif input.dim() == 4 and mode == 'bilinear':
-        return torch._C._nn.upsample_bilinear2d(input, _output_size(2), align_corners)
+        return torch._C._nn.upsample_bilinear2d(input, _output_size(2), align_corners, scale_factor_list[0], scale_factor_list[1])
     elif input.dim() == 4 and mode == 'trilinear':
         raise NotImplementedError("Got 4D input, but trilinear mode needs 5D input")
     elif input.dim() == 5 and mode == 'linear':
@@ -2506,9 +2578,10 @@ def interpolate(input, size=None, scale_factor=None, mode='nearest', align_corne
     elif input.dim() == 5 and mode == 'bilinear':
         raise NotImplementedError("Got 5D input, but bilinear mode needs 4D input")
     elif input.dim() == 5 and mode == 'trilinear':
-        return torch._C._nn.upsample_trilinear3d(input, _output_size(3), align_corners)
+        return torch._C._nn.upsample_trilinear3d(input, _output_size(3), align_corners,
+                                                 scale_factor_list[0], scale_factor_list[1], scale_factor_list[2])
     elif input.dim() == 4 and mode == 'bicubic':
-        return torch._C._nn.upsample_bicubic2d(input, _output_size(2), align_corners)
+        return torch._C._nn.upsample_bicubic2d(input, _output_size(2), align_corners, scale_factor_list[0], scale_factor_list[1])
     else:
         raise NotImplementedError("Input Error: Only 3D, 4D and 5D input Tensors supported"
                                   " (got {}D) for the modes: nearest | linear | bilinear | bicubic | trilinear"
@@ -2573,8 +2646,8 @@ GRID_SAMPLE_PADDING_MODES = {
 }
 
 
-def grid_sample(input, grid, mode='bilinear', padding_mode='zeros'):
-    # type: (Tensor, Tensor, str, str) -> Tensor
+def grid_sample(input, grid, mode='bilinear', padding_mode='zeros', align_corners=None):
+    # type: (Tensor, Tensor, str, str, Optional[bool]) -> Tensor
     r"""Given an :attr:`input` and a flow-field :attr:`grid`, computes the
     ``output`` using :attr:`input` values and pixel locations from :attr:`grid`.
 
@@ -2612,7 +2685,9 @@ def grid_sample(input, grid, mode='bilinear', padding_mode='zeros'):
           and becomes ``x' = 1.5``, then reflects by border ``1`` and becomes
           ``x'' = -0.5``.
 
-    .. Note:: This function is often used in building `Spatial Transformer Networks`_ .
+    .. note::
+        This function is often used in conjunction with :func:`affine_grid`
+        to build `Spatial Transformer Networks`_ .
     .. include:: cuda_deterministic_backward.rst
 
     Args:
@@ -2624,12 +2699,31 @@ def grid_sample(input, grid, mode='bilinear', padding_mode='zeros'):
             ``'bilinear'`` | ``'nearest'``. Default: ``'bilinear'``
         padding_mode (str): padding mode for outside grid values
             ``'zeros'`` | ``'border'`` | ``'reflection'``. Default: ``'zeros'``
+        align_corners (bool, optional): Geometrically, we consider the pixels of the
+            input  as squares rather than points.
+            If set to ``True``, the extrema (``-1`` and ``1``) are considered as referring
+            to the center points of the input's corner pixels. If set to ``False``, they
+            are instead considered as referring to the corner points of the input's corner
+            pixels, making the sampling more resolution agnostic.
+            This option parallels the ``align_corners`` option in
+            :func:`interpolate`, and so whichever option is used here
+            should also be used there to resize the input image before grid sampling.
+            Default: ``False``
 
     Returns:
         output (Tensor): output Tensor
 
     .. _`Spatial Transformer Networks`:
         https://arxiv.org/abs/1506.02025
+
+    .. warning::
+        When ``align_corners = True``, the grid positions depend on the pixel
+        size relative to the input image size, and so the locations sampled by
+        :func:`grid_sample` will differ for the same input given at different
+        resolutions (that is, after being upsampled or downsampled).
+        The default behavior up to version 1.2.0 was ``align_corners = True``.
+        Since then, the default behavior has been changed to ``align_corners = False``,
+        in order to bring it in line with the default for :func:`interpolate`.
     """
     if mode != 'bilinear' and mode != 'nearest':
         raise ValueError("nn.functional.grid_sample(): expected mode to be "
@@ -2641,34 +2735,112 @@ def grid_sample(input, grid, mode='bilinear', padding_mode='zeros'):
 
     if mode == 'bilinear':
         mode_enum = 0
-    else:
+    else:  # mode == 'nearest'
         mode_enum = 1
 
     if padding_mode == 'zeros':
         padding_mode_enum = 0
     elif padding_mode == 'border':
         padding_mode_enum = 1
-    else:
+    else:  # padding_mode == 'reflection'
         padding_mode_enum = 2
 
-    return torch.grid_sampler(input, grid, mode_enum, padding_mode_enum)
+    if align_corners is None:
+        warnings.warn("Default grid_sample and affine_grid behavior has changed "
+                      "to align_corners=False since 1.3.0. Please specify "
+                      "align_corners=True if the old behavior is desired. "
+                      "See the documentation of grid_sample for details.")
+        align_corners = False
+
+    return torch.grid_sampler(input, grid, mode_enum, padding_mode_enum, align_corners)
 
 
-def affine_grid(theta, size):
-    # type: (Tensor, List[int]) -> Tensor
-    r"""Generates a 2d flow field, given a batch of affine matrices :attr:`theta`.
-    Generally used in conjunction with :func:`grid_sample` to
-    implement Spatial Transformer Networks.
+def affine_grid(theta, size, align_corners=None):
+    # type: (Tensor, List[int], Optional[bool]) -> Tensor
+    r"""Generates a 2D or 3D flow field (sampling grid), given a batch of
+    affine matrices :attr:`theta`.
+
+    .. note::
+        This function is often used in conjunction with :func:`grid_sample`
+        to build `Spatial Transformer Networks`_ .
 
     Args:
-        theta (Tensor): input batch of affine matrices (:math:`N \times 2 \times 3`)
-        size (torch.Size): the target output image size (:math:`N \times C \times H \times W`).
+        theta (Tensor): input batch of affine matrices with shape
+            (:math:`N \times 2 \times 3`) for 2D or
+            (:math:`N \times 3 \times 4`) for 3D
+        size (torch.Size): the target output image size.
+            (:math:`N \times C \times H \times W` for 2D or
+            :math:`N \times C \times D \times H \times W` for 3D)
             Example: torch.Size((32, 3, 24, 24))
+        align_corners (bool, optional): if ``True``, consider ``-1`` and ``1``
+            to refer to the centers of the corner pixels rather than the image corners.
+            Refer to :func:`grid_sample` for a more complete description.
+            A grid generated by :func:`affine_grid` should be passed to :func:`grid_sample`
+            with the same setting for this option.
+            Default: ``False``
 
     Returns:
         output (Tensor): output Tensor of size (:math:`N \times H \times W \times 2`)
+
+    .. _`Spatial Transformer Networks`:
+        https://arxiv.org/abs/1506.02025
+
+    .. warning::
+        When ``align_corners = True``, the grid positions depend on the pixel
+        size relative to the input image size, and so the locations sampled by
+        :func:`grid_sample` will differ for the same input given at different
+        resolutions (that is, after being upsampled or downsampled).
+        The default behavior up to version 1.2.0 was ``align_corners = True``.
+        Since then, the default behavior has been changed to ``align_corners = False``,
+        in order to bring it in line with the default for :func:`interpolate`.
+    .. warning::
+        When ``align_corners = True``, 2D affine transforms on 1D data and
+        3D affine transforms on 2D data (that is, when one of the spatial
+        dimensions has unit size) are ill-defined, and not an intended use case.
+        This is not a problem when ``align_corners = False``.
+        Up to version 1.2.0, all grid points along a unit dimension were
+        considered arbitrarily to be at ``-1``.
+        From version 1.3.0, under ``align_corners = True`` all grid points
+        along a unit dimension are condsidered to be at ```0``
+        (the center of the input image).
     """
-    return vision.affine_grid_generator(theta, size)
+    if align_corners is None:
+        warnings.warn("Default grid_sample and affine_grid behavior has changed "
+                      "to align_corners=False since 1.3.0. Please specify "
+                      "align_corners=True if the old behavior is desired. "
+                      "See the documentation of grid_sample for details.")
+        align_corners = False
+
+    # enforce floating point dtype on theta
+    if not theta.is_floating_point():
+        raise ValueError("Expected theta to have floating point type, but got {}"
+                         .format(theta.dtype))
+    # check that shapes and sizes match
+    if len(size) == 4:
+        if theta.dim() != 3 or theta.shape[-2] != 2 or theta.shape[-1] != 3:
+            raise ValueError("Expected a batch of 2D affine matrices of shape Nx2x3 "
+                             "for size {}. Got {}.".format(size, theta.shape))
+        spatial_size = size[-2:]  # spatial dimension sizes
+    elif len(size) == 5:
+        if theta.dim() != 3 or theta.shape[-2] != 3 or theta.shape[-1] != 4:
+            raise ValueError("Expected a batch of 3D affine matrices of shape Nx3x4 "
+                             "for size {}. Got {}.".format(size, theta.shape))
+        spatial_size = size[-3:]  # spatial dimension sizes
+    else:
+        raise NotImplementedError("affine_grid only supports 4D and 5D sizes, "
+                                  "for 2D and 3D affine transforms, respectively. "
+                                  "Got size {}.".format(size))
+    # check for empty span
+    if align_corners and min(spatial_size) == 1:
+        warnings.warn("Since version 1.3.0, affine_grid behavior has changed "
+                      "for unit-size grids when align_corners=True. "
+                      "This is not an intended use case of affine_grid. "
+                      "See the documentation of affine_grid for details.")
+    elif min(size) <= 0:
+        raise ValueError("Expected non-zero, positive output size. Got {}"
+                         .format(size))
+
+    return torch.affine_grid_generator(theta, size, align_corners)
 
 
 def pad(input, pad, mode='constant', value=0):
@@ -2731,50 +2903,43 @@ def pad(input, pad, mode='constant', value=0):
     assert len(pad) % 2 == 0, 'Padding length must be divisible by 2'
     assert len(pad) // 2 <= input.dim(), 'Padding length too large'
     if mode == 'constant':
-        ret = _VF.constant_pad_nd(input, pad, value)
+        return _VF.constant_pad_nd(input, pad, value)
     else:
         assert value == 0, 'Padding mode "{}"" doesn\'t take in value argument'.format(mode)
         if input.dim() == 3:
             assert len(pad) == 2, '3D tensors expect 2 values for padding'
             if mode == 'reflect':
-                ret = torch._C._nn.reflection_pad1d(input, pad)
+                return torch._C._nn.reflection_pad1d(input, pad)
             elif mode == 'replicate':
-                ret = torch._C._nn.replication_pad1d(input, pad)
+                return torch._C._nn.replication_pad1d(input, pad)
             elif mode == 'circular':
-                ret = _pad_circular(input, pad)
+                return _pad_circular(input, pad)
             else:
-                ret = input  # TODO: remove this when jit raise supports control flow
                 raise NotImplementedError
 
         elif input.dim() == 4:
             assert len(pad) == 4, '4D tensors expect 4 values for padding'
             if mode == 'reflect':
-                ret = torch._C._nn.reflection_pad2d(input, pad)
+                return torch._C._nn.reflection_pad2d(input, pad)
             elif mode == 'replicate':
-                ret = torch._C._nn.replication_pad2d(input, pad)
+                return torch._C._nn.replication_pad2d(input, pad)
             elif mode == 'circular':
-                ret = _pad_circular(input, pad)
+                return _pad_circular(input, pad)
             else:
-                ret = input  # TODO: remove this when jit raise supports control flow
                 raise NotImplementedError
 
         elif input.dim() == 5:
             assert len(pad) == 6, '5D tensors expect 6 values for padding'
             if mode == 'reflect':
-                ret = input  # TODO: remove this when jit raise supports control flow
                 raise NotImplementedError
             elif mode == 'replicate':
-                ret = torch._C._nn.replication_pad3d(input, pad)
+                return torch._C._nn.replication_pad3d(input, pad)
             elif mode == 'circular':
-                ret = _pad_circular(input, pad)
+                return _pad_circular(input, pad)
             else:
-                ret = input  # TODO: remove this when jit raise supports control flow
                 raise NotImplementedError
         else:
-            ret = input  # TODO: remove this when jit raise supports control flow
             raise NotImplementedError("Only 3D, 4D, 5D padding with non-constant padding are supported for now")
-
-    return ret
 
 # distance
 
@@ -2922,11 +3087,10 @@ def normalize(input, p=2, dim=1, eps=1e-12, out=None):
     """
     if out is None:
         denom = input.norm(p, dim, True).clamp_min(eps).expand_as(input)
-        ret = input / denom
+        return input / denom
     else:
         denom = input.norm(p, dim, True).clamp_min(eps).expand_as(input)
-        ret = torch.div(input, denom, out=out)
-    return ret
+        return torch.div(input, denom, out=out)
 
 
 def assert_int_or_pair(arg, arg_name, message):
@@ -2959,12 +3123,10 @@ def unfold(input, kernel_size, dilation=1, padding=0, stride=1):
         assert_int_or_pair(padding, 'padding', msg)
         assert_int_or_pair(stride, 'stride', msg)
 
-        ret = torch._C._nn.im2col(input, _pair(kernel_size),
-                                  _pair(dilation), _pair(padding), _pair(stride))
+        return torch._C._nn.im2col(input, _pair(kernel_size),
+                                   _pair(dilation), _pair(padding), _pair(stride))
     else:
         raise NotImplementedError("Input Error: Only 4D input Tensors are supported (got {}D)".format(input.dim()))
-        ret = input  # TODO: remove when jit supports exception control flow
-    return ret
 
 
 def fold(input, output_size, kernel_size, dilation=1, padding=0, stride=1):
@@ -2986,12 +3148,10 @@ def fold(input, output_size, kernel_size, dilation=1, padding=0, stride=1):
         assert_int_or_pair(padding, 'padding', msg)
         assert_int_or_pair(stride, 'stride', msg)
 
-        ret = torch._C._nn.col2im(input, _pair(output_size), _pair(kernel_size),
-                                  _pair(dilation), _pair(padding), _pair(stride))
+        return torch._C._nn.col2im(input, _pair(output_size), _pair(kernel_size),
+                                   _pair(dilation), _pair(padding), _pair(stride))
     else:
         raise NotImplementedError("Input Error: Only 3D input Tensors are supported (got {}D)".format(input.dim()))
-        ret = input  # TODO: remove when jit supports exception control flow
-    return ret
 
 
 def _pad_circular(input, padding):
@@ -3064,7 +3224,7 @@ def multi_head_attention_forward(query,                           # type: Tensor
         attn_mask: mask that prevents attention to certain positions. This is an additive mask
             (i.e. the values will be added to the attention layer).
         use_separate_proj_weight: the function accept the proj. weights for query, key,
-            and value in differnt forms. If false, in_proj_weight will be used, which is
+            and value in different forms. If false, in_proj_weight will be used, which is
             a combination of q_proj_weight, k_proj_weight, v_proj_weight.
         q_proj_weight, k_proj_weight, v_proj_weight, in_proj_bias: input projection weight and bias.
         static_k, static_v: static key and value used for attention operators.
@@ -3092,24 +3252,20 @@ def multi_head_attention_forward(query,                           # type: Tensor
           L is the target sequence length, S is the source sequence length.
     """
 
-    qkv_same = torch.equal(query, key) and torch.equal(key, value)
-    kv_same = torch.equal(key, value)
-
     tgt_len, bsz, embed_dim = query.size()
     assert embed_dim == embed_dim_to_check
-    assert list(query.size()) == [tgt_len, bsz, embed_dim]
     assert key.size() == value.size()
 
     head_dim = embed_dim // num_heads
     assert head_dim * num_heads == embed_dim, "embed_dim must be divisible by num_heads"
     scaling = float(head_dim) ** -0.5
 
-    if use_separate_proj_weight is not True:
-        if qkv_same:
+    if not use_separate_proj_weight:
+        if torch.equal(query, key) and torch.equal(key, value):
             # self-attention
             q, k, v = linear(query, in_proj_weight, in_proj_bias).chunk(3, dim=-1)
 
-        elif kv_same:
+        elif torch.equal(key, value):
             # encoder-decoder attention
             # This is inline in_proj function with in_proj_weight and in_proj_bias
             _b = in_proj_bias

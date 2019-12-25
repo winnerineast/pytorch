@@ -8,6 +8,7 @@
 #include <THC/THCDeviceUtils.cuh>
 #include <THC/THCApply.cuh>
 #include <c10/macros/Macros.h>
+#include <ATen/cuda/detail/KernelUtils.h>
 
 #include <thrust/functional.h>
 
@@ -100,7 +101,7 @@ __global__ void cunn_SpatialClassNLLCriterion_updateOutput_kernel(
        i += step) {
     t = target[toffset + i];
     if (t != ignore_index) {
-      assert(t >= 0 && t < n_classes);
+      CUDA_KERNEL_ASSERT(t >= 0 && t < n_classes);
       cur_weight = weights ? weights[t] : ScalarConvert<int, T>::to(1);
       input_sum -= input[ioffset + i + map_nelem * t] * cur_weight;
       acc_weight += cur_weight;
@@ -155,7 +156,7 @@ __global__ void cunn_SpatialClassNLLCriterion_updateGradInput_kernel(
        i += step) {
     t = (int)target[toffset + i];
     if (t != ignore_index) {
-      assert(t >= 0 && t < n_classes);
+      CUDA_KERNEL_ASSERT(t >= 0 && t < n_classes);
       gradInput[ioffset + i + map_nelem * t] = -(weights ? weights[t] : ScalarConvert<int, T>::to(1)) * norm * gradOutput[0];
     }
   }

@@ -1,5 +1,6 @@
 #include <torch/csrc/jit/passes/alias_analysis.h>
 
+#include <torch/csrc/jit/jit_log.h>
 #include <torch/csrc/jit/operator.h>
 #include <torch/csrc/utils/memory.h>
 
@@ -14,15 +15,12 @@ namespace jit {
 // introduce more granularity here (e.g. List[int] will never alias
 // List[float]).
 c10::optional<TypeKind> AliasDb::getMutableTypeKind(const TypePtr& type) {
-  if (type->isSubtypeOf(TensorType::get())) {
-    return TypeKind::TensorType;
-  }
-
   switch (type->kind()) {
     case TypeKind::ListType:
     case TypeKind::TupleType:
     case TypeKind::DictType:
     case TypeKind::ClassType:
+    case TypeKind::TensorType:
       return type->kind();
     case TypeKind::OptionalType:
       return getMutableTypeKind(type->cast<OptionalType>()->getElementType());
@@ -31,14 +29,14 @@ c10::optional<TypeKind> AliasDb::getMutableTypeKind(const TypePtr& type) {
   }
 }
 
-bool AliasDb::shouldAnnotate(const TypePtr& type) {
+bool AliasDb::mutableType(const TypePtr& type) {
   return getMutableTypeKind(type) != c10::nullopt;
 }
 
 // We only need to annotate values that either are mutable or could contain
 // mutable types.
-bool AliasDb::shouldAnnotate(const Value* v) {
-  return shouldAnnotate(v->type());
+bool AliasDb::mutableType(const Value* v) {
+  return mutableType(v->type());
 }
 
 bool AliasDb::isContainerType(const TypePtr& type) {
@@ -56,20 +54,37 @@ AliasDb::~AliasDb() = default;
 AliasDb::AliasDb(std::shared_ptr<Graph> graph) : graph_(std::move(graph)) {
   memoryDAG_ = torch::make_unique<MemoryDAG>();
   analyze(graph_);
+  GRAPH_DEBUG(toString());
 }
 
-bool AliasDb::hasWriters(const Node* n) const {
+bool AliasDb::isMutable(Node* n) const {
+  ValueSet vs;
+  for (const auto input : n->inputs()) {
+    vs.insert(input);
+  }
+  return writesToAlias(n, vs);
+}
+
+bool AliasDb::hasInputWriters(const Node* n) const {
   for (const auto input : n->inputs()) {
     if (hasWriters(input)) {
       return true;
     }
   }
+  return false;
+}
+
+bool AliasDb::hasOutputWriters(const Node* n) const {
   for (const auto output : n->outputs()) {
     if (hasWriters(output)) {
       return true;
     }
   }
   return false;
+}
+
+bool AliasDb::hasWriters(const Node* n) const {
+  return hasInputWriters(n) || hasOutputWriters(n);
 }
 
 bool AliasDb::hasWriters(const Value* v) const {
@@ -159,8 +174,17 @@ MemoryLocations AliasDb::getReads(Node* n) const {
   return reads;
 }
 
-static std::string getElementName(const Element* e) {
+std::string AliasDb::getElementName(const Element* e) const {
   if (e->value == nullptr) {
+    // not the most efficient way, but given the fact there are
+    // not too many types and even fewer of them will end up in
+    // wildcardIndex_, we should be fine with a linear search
+    // each time we hit a wildcard leaf
+    for (const auto& ent : wildcardIndex_) {
+      if (ent.second == e) {
+        return std::string("WILDCARD for type ") + typeKindToString(ent.first);
+      }
+    }
     return "WILDCARD";
   } else {
     return e->value->debugName();
@@ -168,40 +192,47 @@ static std::string getElementName(const Element* e) {
 }
 
 void AliasDb::dump() const {
-  std::cout << "\n===1. GRAPH===\n";
-  graph_->dump();
+  std::cout << toString();
+}
 
-  std::cout << "\n===2. ALIAS DB===\n";
+std::string AliasDb::toString() const {
+  std::stringstream ss{};
+
+  ss << "\n===1. GRAPH===\n";
+  ss << graph_->toString();
+
+  ss << "\n===2. ALIAS DB===\n";
   for (const auto& ptrPair : elementMap_) {
     const auto element = ptrPair.second;
     if (!element->pointsTo.empty()) {
-      std::cout << getElementName(element) << " points to: ";
+      ss << getElementName(element) << " points to: ";
       for (const auto pointedTo : element->pointsTo) {
-        std::cout << getElementName(memoryDAG_->fromIndex(pointedTo)) << ", ";
+        ss << getElementName(memoryDAG_->fromIndex(pointedTo)) << ", ";
       }
-      std::cout << "\n";
+      ss << "\n";
     }
     if (!element->containedElements.empty()) {
-      std::cout << getElementName(element) << " contains: ";
+      ss << getElementName(element) << " contains: ";
       for (const auto contained : element->containedElements) {
-        std::cout << getElementName(memoryDAG_->fromIndex(contained)) << ", ";
+        ss << getElementName(memoryDAG_->fromIndex(contained)) << ", ";
       }
-      std::cout << "\n";
+      ss << "\n";
     }
   }
 
-  // std::cout << "\n===3. Writes===\n";
-  // for (const auto& pr : writeIndex_) {
-  //   const auto node = pr.first;
-  //   const auto& values = pr.second;
-  //   std::cout << *node;
-  //   std::cout << "  ";
-  //   for (const auto value : values) {
-  //     std::cout << value->debugName() << ", ";
-  //   }
-  //   std::cout << "\n";
-  // }
-  std::cout << "\n";
+  ss << "\n===3. Writes===\n";
+  for (const auto& pr : writeIndex_) {
+    const auto node = pr.first;
+    const auto& values = pr.second;
+    ss << *node;
+    ss << "  ";
+    for (const auto value : values) {
+      ss << getElementName(memoryDAG_->fromIndex(value)) << ", ";
+    }
+    ss << "\n";
+  }
+  ss << "\n";
+  return ss.str();
 }
 
 void AliasDb::analyze(const std::shared_ptr<Graph>& graph) {
@@ -224,9 +255,9 @@ void AliasDb::analyze(Node* node) {
 // Returns true if analysis was run using
 // the registered analyzer.
 bool AliasDb::tryRegisteredAnalysis(Node* node) {
-  const Operator& op = getOperatorFor(node);
+  const Operator& op = node->getOperator();
   auto analysis = op.aliasAnalysisKind();
-  if (AliasAnalysisKind::PURE == analysis) {
+  if (AliasAnalysisKind::PURE_FUNCTION == analysis) {
     analyzeCreator(node);
     return true;
   }
@@ -239,7 +270,7 @@ bool AliasDb::tryRegisteredAnalysis(Node* node) {
 //      information to the outputs. For unschematized nodes, a special analyzer
 //      will have to be handwritten.
 void AliasDb::analyzeImpl(Node* node) {
-  auto op = findOperatorFor(node);
+  auto op = node->maybeOperator();
   const bool hasSpecialCase = aliasAnalysisHasSpecialCaseFor(node->kind());
   if (op) {
     const auto analysis = op->aliasAnalysisKind();
@@ -258,7 +289,7 @@ void AliasDb::analyzeImpl(Node* node) {
           "Op ",
           node->kind().toDisplayString(),
           " has a special case and should be registered with AliasAnalysisKind::INTERNAL_SPECIAL_CASE but is registered with ",
-          toString(analysis));
+          c10::toString(analysis));
     }
   } else {
     TORCH_INTERNAL_ASSERT(
@@ -305,6 +336,7 @@ void AliasDb::analyzeImpl(Node* node) {
     case prim::ListUnpack:
     case prim::PythonOp:
     case prim::GetAttr:
+    case prim::unchecked_cast:
       return analyzeExtractor(node);
     case prim::ConstantChunk:
       return analyzeChunk(node);
@@ -313,20 +345,28 @@ void AliasDb::analyzeImpl(Node* node) {
     case prim::SetAttr:
       return analyzeSetAttr(node);
     case prim::profile:
-      AT_ERROR("Analyzing prim::profile isn't yet implemented");
-      // TODO: simply mapping inputs' aliases to outputs'
-      // should work but a) we should probably avoid exposing
-      // prim::profile to optimizations b) the alias semantics
-      // might be more complicated than just mapAliases
-      // mapAliases(node->inputs(), node->outputs());
+      if (node->inputs().size() > 0) {
+        makePointerTo(node->output(), node->inputs().at(0));
+      }
+      return;
+    case prim::BailOut:
+      TORCH_INTERNAL_ASSERT(node->inputs().at(0)->node()->kind() ==
+                            prim::BailoutTemplate);
+      makePointerTo(node->output(), node->inputs().at(1));
+      return;
+    case prim::Guard:
+      makePointerTo(node->output(), node->inputs().at(0));
       return;
     case prim::CallFunction:
     case prim::CallMethod:
       // TODO: this can be improved with summarizes of what the function does
       // for now we assume the worst
       return analyzeConservative(node);
-    case prim::Print:
     case prim::Uninitialized:
+      giveFreshAlias(node->output());
+      return;
+    case prim::Print:
+    case prim::isinstance:
       // These ops do nothing
       return;
     default:
@@ -343,24 +383,21 @@ void AliasDb::analyzeImpl(Node* node) {
       "Special cases should be handled already if we're here.");
 
   if (node->kind().is_aten() || node->kind().is_prim()) {
-    // TODO This assert is only introduced to check that we don't break the
-    // current code base. Remove this later to allow aten:: and prim:: ops to
-    // use other alias analysis kinds.
+    // TODO There is nothing in the system that relies on aten:: and prim::
+    // ops using AliasAnalysisKind::FROM_SCHEMA or AliasAnalysisKind::INTERNAL_SPECIAL_CASE,
+    // but this is the intended behavior for all current ops and a good error check.
+    // We can consider lifting this constraint later if we have a use case for it.
     TORCH_INTERNAL_ASSERT(
-        analysis == AliasAnalysisKind::FROM_SCHEMA,
-        "aten:: and prim:: operators should use AliasAnalysisKind::FROM_SCHEMA but ",
+        analysis == AliasAnalysisKind::FROM_SCHEMA ||
+            analysis == AliasAnalysisKind::CONSERVATIVE,
+        "aten:: and prim:: operators should use AliasAnalysisKind::FROM_SCHEMA or "
+        "AliasAnalysisKind::CONSERVATIVE(if really necessary), but ",
         node->kind().toDisplayString(),
         " doesn't. Note: Ideally, prim:: operators actually shouldn't have a schema ",
         "and then use AliasAnalysisKind::INTERNAL_SPECIAL_CASE instead.");
   }
 
   if (analysis == AliasAnalysisKind::CONSERVATIVE) {
-    TORCH_INTERNAL_ASSERT(
-        !node->kind().is_aten() && !node->kind().is_prim(),
-        "aten:: and prim:: operators should not use AliasAnalysisKind::CONSERVATIVE but ",
-        node->kind().toDisplayString(),
-        " does.");
-
     // TODO A previous implementation of alias analysis always accessed
     // node->schema , which cause the schema caches in the Node class to be
     // filled for the full graph. Unfortunately, our JIT passes started relying
@@ -379,17 +416,8 @@ void AliasDb::analyzeImpl(Node* node) {
 
   TORCH_INTERNAL_ASSERT(
       analysis == AliasAnalysisKind::FROM_SCHEMA,
-      "AliasAnalysisKind::CONSERVATIVE/PURE/INTERNAL_SPECIAL_CASE should already have been handled above");
+      "AliasAnalysisKind::CONSERVATIVE/PURE_FUNCTION/INTERNAL_SPECIAL_CASE should already have been handled above");
   const auto& schema = node->schema();
-
-  // TODO This assert is only introduced to check that we don't break the
-  // current code base. Remove this later to allow other ops to use
-  // AliasAnalysisKind::FROM_SCHEMA
-  TORCH_INTERNAL_ASSERT(
-      node->kind().is_prim() || node->kind().is_aten(),
-      "The current code base should only have AliasAnalysisKind::FROM_SCHEMA for aten:: and prim:: ops but we found it for ",
-      node->kind().toDisplayString(),
-      ". We want to open this up though.");
 
   // Bind the schema's "formal" alias annotation to the actual values those
   // schema arguments represent
@@ -403,7 +431,7 @@ void AliasDb::analyzeImpl(Node* node) {
     }
 
     // If this type cannot alias, continue. Can occur with a VarType schema
-    if (!shouldAnnotate(actualValue)) {
+    if (!mutableType(actualValue)) {
       continue;
     }
 
@@ -455,7 +483,7 @@ void AliasDb::analyzeImpl(Node* node) {
     }
 
     // If this type cannot alias, continue. Can occur with a VarType schema
-    if (!shouldAnnotate(actual)) {
+    if (!mutableType(actual)) {
       continue;
     }
 
@@ -503,7 +531,7 @@ void AliasDb::analyzeImpl(Node* node) {
 
 // Register the fact that `n` writes to `v`.
 void AliasDb::registerWrite(const Value* v, Node* n) {
-  if (!shouldAnnotate(v)) {
+  if (!mutableType(v)) {
     // don't need to register a write if the value isn't mutable
     return;
   }
@@ -636,7 +664,7 @@ void AliasDb::analyzeTupleConstruct(Node* node) {
   // only if it contains elements which need annotation
   getOrCreateElement(node->output());
   for (const auto& input : node->inputs()) {
-    if (shouldAnnotate(input)) {
+    if (mutableType(input)) {
       addToContainedElements(input, node->output());
     }
   }
@@ -659,7 +687,7 @@ void AliasDb::analyzeConservative(Node* node) {
     registerWrite(input, node);
     // We may also write to any contained types
     for (const auto& type : input->type()->containedTypes()) {
-      if (shouldAnnotate(type)) {
+      if (mutableType(type)) {
         auto el = getOrCreateWildcard(type);
         registerWrite(el, node);
       }
@@ -725,8 +753,8 @@ void AliasDb::makePointerTo(const Value* from, const Value* to) {
     return;
   }
 
-  if (!shouldAnnotate(from)) {
-    TORCH_INTERNAL_ASSERT(!shouldAnnotate(to));
+  if (!mutableType(from)) {
+    TORCH_INTERNAL_ASSERT(!mutableType(to));
     return;
   }
 
@@ -742,7 +770,7 @@ void AliasDb::makePointerTo(const Value* from, const Value* to) {
   }
 
   // At this point, we should be dealing with two mutable types.
-  TORCH_INTERNAL_ASSERT(shouldAnnotate(from) && shouldAnnotate(to));
+  TORCH_INTERNAL_ASSERT(mutableType(from) && mutableType(to));
 
   auto fromEl = getOrCreateElement(from);
   auto toEl = getOrCreateElement(to);
@@ -753,7 +781,7 @@ void AliasDb::makePointerTo(const Value* from, const Value* to) {
 void AliasDb::addToContainedElements(
     const Value* elem,
     const Value* container) {
-  if (!shouldAnnotate(elem)) {
+  if (!mutableType(elem)) {
     return;
   }
 
@@ -766,7 +794,7 @@ void AliasDb::addToContainedElements(
 }
 
 bool AliasDb::mayAlias(const Value* a, const Value* b) const {
-  if (!shouldAnnotate(a) || !shouldAnnotate(b)) {
+  if (!mutableType(a) || !mutableType(b)) {
     return false;
   }
 
@@ -829,7 +857,7 @@ bool AliasDb::mayContainAlias(
     if (cannotCheckAliasContainment(val)) {
       return true;
     }
-    if (shouldAnnotate(val)) {
+    if (mutableType(val)) {
       a_elements.push_back(elementMap_.at(val));
     }
   }
@@ -843,7 +871,7 @@ bool AliasDb::mayContainAlias(
     if (cannotCheckAliasContainment(val)) {
       return true;
     }
-    if (shouldAnnotate(val)) {
+    if (mutableType(val)) {
       b_elements.push_back(elementMap_.at(val));
     }
   }
@@ -859,7 +887,7 @@ void AliasDb::mapAliases(at::ArrayRef<Value*> from, at::ArrayRef<Value*> to) {
 }
 
 void AliasDb::giveFreshAlias(const Value* value) {
-  if (!shouldAnnotate(value)) {
+  if (!mutableType(value)) {
     return;
   }
 
@@ -1226,6 +1254,8 @@ bool aliasAnalysisHasSpecialCaseFor(Symbol symbol) {
       prim::CallFunction,
       prim::CallMethod,
       aten::wait,
+      prim::isinstance,
+      prim::unchecked_cast,
   };
 
   // Operators that should not be used by alias analysis
@@ -1235,7 +1265,6 @@ bool aliasAnalysisHasSpecialCaseFor(Symbol symbol) {
       prim::Drop,
       at::onnx::Reshape,
       at::onnx::Shape,
-      prim::AutogradAnyNonZero,
       prim::AutogradAdd,
   };
 
@@ -1243,7 +1272,7 @@ bool aliasAnalysisHasSpecialCaseFor(Symbol symbol) {
 }
 
 bool AliasDb::mayAliasWildcard(const Value* v) const {
-  if (!shouldAnnotate(v)) {
+  if (!mutableType(v)) {
     return false;
   }
 
@@ -1256,7 +1285,7 @@ bool AliasDb::mayAliasWildcard(const Value* v) const {
 
 // Search the wildcard index for an element that corresponds to the given type.
 Element* AliasDb::getOrCreateWildcard(const TypePtr& type) {
-  TORCH_INTERNAL_ASSERT(shouldAnnotate(type));
+  TORCH_INTERNAL_ASSERT(mutableType(type));
   const auto kind = getMutableTypeKind(type);
   TORCH_INTERNAL_ASSERT(kind);
 
@@ -1279,12 +1308,31 @@ Element* AliasDb::getWildcard(const TypePtr& type) const {
 
 // Register `v` as a wildcard value.
 void AliasDb::setWildcard(const Value* v) {
-  if (!shouldAnnotate(v)) {
+  if (!mutableType(v)) {
     return;
   }
-  auto e = getOrCreateWildcard(v->type());
-  TORCH_INTERNAL_ASSERT(e != nullptr);
-  memoryDAG_->makePointerTo(getOrCreateElement(v), e);
+  auto wildcardElement = getOrCreateWildcard(v->type());
+  TORCH_INTERNAL_ASSERT(wildcardElement != nullptr);
+
+  // Making a value a wildcard means that all its potential memory locations
+  // may alias the wildcard set.
+  const MemoryLocations pointeeSet = getOrCreateElement(v)->getMemoryLocations();
+  for (const auto& pointee : pointeeSet) {
+    auto from = memoryDAG_->fromIndex(pointee);
+    // avoid cycles where the wildcard points to itself
+    if (from != wildcardElement) {
+      memoryDAG_->makePointerTo(from, wildcardElement);
+    }
+  }
+
+  // We also need to update the write index with new writes to the wildcard set.
+  for (auto& pr : writeIndex_) {
+    auto& writtenTo = pr.second;
+    if (writtenTo.intersects(pointeeSet)) {
+      writtenTo.set(wildcardElement->index);
+    }
+  }
+  isWriteCacheStale_ = true;
 }
 
 void AliasDb::rebuildWriteCache() const {

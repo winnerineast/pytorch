@@ -28,8 +28,6 @@ namespace script {
 // ClassDef = ClassDef(Ident name,                                      TK_CLASS_DEF
 //                     Maybe<Expr> superclass,
 //                     List<Stmt> body)
-// NamedTupleDef = NamedTupleDef(Ident name, List<Ident> fields,
-//                               List<Maybe<Expr>> types)
 //
 // Stmt  = If(Expr cond, List<Stmt> true_body, List<Stmt> false_body)   TK_IF
 //       | For(List<Expr> targets, List<Expr> iters, List<Stmt> body)   TK_FOR
@@ -251,6 +249,7 @@ struct Stmt : public TreeView {
       case TK_ASSERT:
       case TK_PASS:
       case TK_BREAK:
+      case TK_DELETE:
       case TK_CONTINUE:
       case TK_DEF:
         return;
@@ -278,6 +277,7 @@ struct Expr : public TreeView {
       case '+':
       case '-':
       case TK_UNARY_MINUS:
+      case '~':
       case '*':
       case TK_STARRED:
       case '/':
@@ -398,6 +398,9 @@ struct Def : public TreeView {
     auto new_ident = Ident::create(name().range(), std::move(new_name));
     return create(range(), new_ident, decl(), statements());
   }
+  Def withDecl(Decl decl) const {
+    return create(range(), name(), decl, statements());
+  }
   Ident name() const {
     return Ident(subtree(0));
   }
@@ -440,29 +443,6 @@ struct ClassDef : public TreeView {
       const List<Stmt>& body) {
     return ClassDef(
         Compound::create(TK_CLASS_DEF, range, {name, superclass, body}));
-  }
-};
-
-struct NamedTupleDef : public TreeView {
-  explicit NamedTupleDef(const TreeRef& tree) : TreeView(tree) {
-    tree->match(TK_NAMED_TUPLE_DEF);
-  }
-  Ident name() const {
-    return Ident(subtree(0));
-  }
-  List<Ident> fields() const {
-    return List<Ident>(subtree(1));
-  }
-  List<Maybe<Expr>> type_exprs() const {
-    return List<Maybe<Expr>>(subtree(2));
-  }
-  static NamedTupleDef create(
-      const SourceRange& range,
-      const Ident& name,
-      const List<Ident>& fields,
-      const List<Maybe<Expr>>& type_exprs) {
-    return NamedTupleDef(Compound::create(
-        TK_NAMED_TUPLE_DEF, range, {name, fields, type_exprs}));
   }
 };
 
@@ -618,14 +598,20 @@ struct Assign : public Stmt {
   }
   static Assign create(
       const SourceRange& range,
-      const Expr& lhs,
+      const List<Expr>& lhs,
       const Maybe<Expr>& rhs,
       const Maybe<Expr>& type) {
     return Assign(Compound::create(TK_ASSIGN, range, {lhs, rhs, type}));
   }
 
+  List<Expr> lhs_list() const {
+    return List<Expr>(subtree(0));
+  }
+
   Expr lhs() const {
-    return Expr(subtree(0));
+    const auto& li = lhs_list();
+    TORCH_INTERNAL_ASSERT(li.size() == 1);
+    return *li.begin();
   }
 
   Maybe<Expr> rhs() const {
@@ -658,6 +644,10 @@ struct Raise : public Stmt {
   }
   static Raise create(const SourceRange& range, const Maybe<Expr>& expr) {
     return Raise(Compound::create(TK_RAISE, range, {expr}));
+  }
+  static Raise create(const SourceRange& range) {
+    return Raise(
+        Compound::create(TK_RAISE, range, {Maybe<Expr>::create(range)}));
   }
 };
 
@@ -784,6 +774,7 @@ struct UnaryOp : public Expr {
   explicit UnaryOp(const TreeRef& tree) : Expr(tree) {
     switch (tree->kind()) {
       case TK_UNARY_MINUS:
+      case '~':
       case TK_NOT:
         if (tree->trees().size() != 1)
           throw ErrorReport(tree)
@@ -804,15 +795,23 @@ struct Const : public Expr {
     tree_->matchNumSubtrees(TK_CONST, 1);
   }
   bool isFloatingPoint() const {
-    return subtree(0)->stringValue().find_first_of(".eE") != std::string::npos;
+    bool is_inf = subtree(0)->stringValue() == "inf";
+    return is_inf || subtree(0)->stringValue().find_first_of(".eE") != std::string::npos;
   }
   bool isIntegral() const {
     return !isFloatingPoint();
   }
   int64_t asIntegral() const {
-    return c10::stoll(subtree(0)->stringValue());
+    try {
+      return c10::stoll(subtree(0)->stringValue(), /*pos=*/0, /*base=*/0);
+    } catch (const std::out_of_range& e) {
+      throw ErrorReport(range()) << "Integral constant out of range "
+                                    "(must fit in a signed 64 bit integer)";
+    }
   }
   double asFloatingPoint() const {
+    // We can't pass in nullptr as the dummy pointer gets dereferenced for
+    // Android version of strtod_c().
     char* dummy;
     return torch::jit::script::strtod_c(
         subtree(0)->stringValue().c_str(), &dummy);
@@ -911,12 +910,13 @@ struct SliceExpr : public Expr {
       const Maybe<Expr>& start,
       const Maybe<Expr>& end,
       const Maybe<Expr>& step) {
-    return SliceExpr(Compound::create(TK_SLICE_EXPR, range, {start, end, step}));
+    return SliceExpr(
+        Compound::create(TK_SLICE_EXPR, range, {start, end, step}));
   }
 
  private:
   Expr createInt(int value) const {
-    return Expr(Const::create(range(), std::to_string(value)));
+    return Expr(Const::create(range(), c10::to_string(value)));
   }
 };
 
@@ -1030,6 +1030,18 @@ struct Starred : public Expr {
   }
   static Starred create(const SourceRange& range, const Expr& expr) {
     return Starred(Compound::create(TK_STARRED, range, {expr}));
+  }
+};
+
+struct Delete : public Stmt {
+  explicit Delete(const TreeRef& tree) : Stmt(tree) {
+    tree_->match(TK_DELETE);
+  }
+  Expr expr() const {
+    return Expr(subtree(0));
+  }
+  static Delete create(const Expr& value) {
+    return Delete(Compound::create(TK_DELETE, value.range(), {value}));
   }
 };
 

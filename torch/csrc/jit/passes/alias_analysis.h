@@ -61,13 +61,23 @@ class AliasDb {
   // value in group `b`? i.e. may they overlap?
   TORCH_API bool mayAlias(const ValueSet& a, const ValueSet& b) const;
 
+  // Do any nodes write to an alias set input to `n`?
+  TORCH_API bool hasInputWriters(const Node* n) const;
+
+  // Do any nodes write to an alias set output by `n`?
+  TORCH_API bool hasOutputWriters(const Node* n) const;
+
   // Do any nodes write to an alias set inputed/outputed by `n`?
   TORCH_API bool hasWriters(const Node* n) const;
+
+  // Is the operation in-place? i.e. doesn't write anywhere but locations it
+  // reads from.
+  TORCH_API bool isMutable(Node* n) const;
 
   // Move 'n' (already in the graph) after 'movePoint' in the topological order.
   //
   // Tries to preserve value dependencies, so other nodes might be moved. We
-  // make two gurantees about the postcondition of the node list:
+  // make two guarantees about the postcondition of the node list:
   //   - `n` is directly after `movePoint`.
   //   - only nodes between `n` and `movePoint` have been moved.
   //
@@ -81,6 +91,10 @@ class AliasDb {
 
   // For debugging: print alias db state to stdout
   TORCH_API void dump() const;
+  TORCH_API std::string toString() const;
+
+  static bool mutableType(const Value* v);
+  static bool mutableType(const TypePtr& type);
 
  private:
   // Helper for topologically-safe node moves.
@@ -157,8 +171,6 @@ class AliasDb {
   void giveFreshAlias(const Value* value);
   Element* getOrCreateElement(const Value* value);
 
-  static bool shouldAnnotate(const Value* v);
-  static bool shouldAnnotate(const TypePtr& type);
   static c10::optional<TypeKind> getMutableTypeKind(const TypePtr& type);
 
   static bool isContainerType(const TypePtr& type);
@@ -184,6 +196,7 @@ class AliasDb {
   mutable MemoryLocations writeCache_;
   mutable bool isWriteCacheStale_ = true;
   void rebuildWriteCache() const;
+  std::string getElementName(const Element* e) const;
 };
 
 // Used to assert that unschematized operators have an analysis method written
