@@ -50,7 +50,7 @@ def _propagate_qconfig_helper(module, qconfig_dict, white_list=None,
                                   module_qconfig, module_prefix)
 
 # TODO(jerryzh): expose white_list
-def propagate_qconfig_(module, qconfig_dict=None):
+def propagate_qconfig_(module, qconfig_dict=None, white_list=None):
     r"""Propagate qconfig through the module hierarchy and assign `qconfig`
     attribute on each leaf module
 
@@ -66,7 +66,7 @@ def propagate_qconfig_(module, qconfig_dict=None):
     """
     if qconfig_dict is None:
         qconfig_dict = {}
-    _propagate_qconfig_helper(module, qconfig_dict)
+    _propagate_qconfig_helper(module, qconfig_dict, white_list)
 
 def _observer_forward_hook(self, input, output):
     r"""Forward hook that calls observer on the output
@@ -86,7 +86,7 @@ def add_observer_(module):
         None, module is modified inplace with added observer modules and forward_hooks
     """
     for child in module.children():
-        if type(child) == nnq.FloatFunctional:
+        if type(child) == nnq.FloatFunctional or type(child) == nnq.QFunctional:
             if hasattr(child, 'qconfig') and child.qconfig is not None:
                 child.activation_post_process = child.qconfig.activation()
         else:
@@ -122,10 +122,10 @@ def add_quant_dequant(module):
         module._modules[name] = add_quant_dequant(child)
     return module
 
-def prepare(model, qconfig_dict=None, inplace=False):
+def prepare(model, inplace=False, white_list=DEFAULT_QCONFIG_PROPAGATE_WHITE_LIST):
     r"""Prepares a copy of the model for quantization calibration or quantization-aware training.
 
-    Quantization configuration can be passed as an `qconfig_dict` or assigned preemptively
+    Quantization configuration should be assigned preemptively
     to individual submodules in `.qconfig` attribute.
 
     The model will be attached with observer or fake quant modules, and qconfig
@@ -133,15 +133,11 @@ def prepare(model, qconfig_dict=None, inplace=False):
 
     Args:
         model: input model to be modified in-place
-        qconfig_dict: dictionary that maps from name or type of submodule to quantization
-            configuration, qconfig applies to all submodules of a given
-            module unless qconfig for the submodules are specified (when the
-            submodule already has qconfig attribute)
         inplace: carry out model transformations in-place, the original module is mutated
     """
     if not inplace:
         model = copy.deepcopy(model)
-    propagate_qconfig_(model)
+    propagate_qconfig_(model, qconfig_dict=None, white_list=white_list)
     # sanity check common API misusage
     if not any(hasattr(m, 'qconfig') and m.qconfig for m in model.modules()):
         warnings.warn("None of the submodule got qconfig applied. Make sure you "
@@ -149,6 +145,19 @@ def prepare(model, qconfig_dict=None, inplace=False):
                       "by assigning the `.qconfig` attribute directly on submodules")
     add_observer_(model)
     return model
+
+def _remove_qconfig(module):
+    r"""Clean up the qconfig left in the module so that new qconfig can be
+    propagated.
+
+    Args:
+        module: module to be cleaned up
+    """
+    for child in module.children():
+        _remove_qconfig(child)
+
+    if hasattr(module, "qconfig"):
+        del module.qconfig
 
 def quantize(model, run_fn, run_args, mapping=None, inplace=False):
     r"""Converts a float model to quantized model.
@@ -177,6 +186,7 @@ def quantize(model, run_fn, run_args, mapping=None, inplace=False):
     prepare(model, inplace=True)
     run_fn(model, run_args)
     convert(model, mapping, inplace=True)
+    _remove_qconfig(model)
     return model
 
 def quantize_dynamic(model, qconfig_spec=None, dtype=torch.qint8,
@@ -217,8 +227,7 @@ def quantize_dynamic(model, qconfig_spec=None, dtype=torch.qint8,
             }
         elif dtype == torch.float16:
             qconfig_spec = {
-                # TODO: uncomment when float16 Linear support is added
-                # nn.Linear : default_dynamic_qconfig,
+                nn.Linear : float16_dynamic_qconfig,
                 nn.LSTM : float16_dynamic_qconfig,
             }
         else:
@@ -241,6 +250,7 @@ def quantize_dynamic(model, qconfig_spec=None, dtype=torch.qint8,
     model.eval()
     propagate_qconfig_(model, qconfig_spec)
     convert(model, mapping, inplace=True)
+    _remove_qconfig(model)
     return model
 
 def prepare_qat(model, mapping=None, inplace=False):
@@ -248,8 +258,8 @@ def prepare_qat(model, mapping=None, inplace=False):
     Prepares a copy of the model for quantization calibration or
     quantization-aware training and convers it to quantized version.
 
-    Quantization configuration can be passed as an `qconfig_dict` or assigned
-    preemptively to individual submodules in `.qconfig` attribute.
+    Quantization configuration should be assigned preemptively
+    to individual submodules in `.qconfig` attribute.
 
     Args:
         model: input model to be modified in-place
@@ -309,6 +319,9 @@ def convert(module, mapping=None, inplace=False):
     SWAPPABLE_MODULES = (nni.ConvBn2d,
                          nni.ConvBnReLU2d,
                          nni.LinearReLU,
+                         nni.BNReLU2d,
+                         nni.BNReLU3d,
+                         nni.ConvReLU1d,
                          nni.ConvReLU2d,
                          nni.ConvReLU3d)
 

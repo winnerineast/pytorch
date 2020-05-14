@@ -1,13 +1,11 @@
-
-
 #include <ATen/cuda/CUDABlas.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <ATen/native/DilatedConvolutionUtils.h>
 #include <ATen/cuda/CUDAApplyUtils.cuh>
 #include <tuple>
-#include "ATen/ATen.h"
-#include "ATen/native/cuda/im2col.cuh"
-#include "ATen/native/cuda/vol2col.cuh"
+#include <ATen/ATen.h>
+#include <ATen/native/cuda/im2col.cuh>
+#include <ATen/native/cuda/vol2col.cuh>
 
 namespace at {
 namespace native {
@@ -244,7 +242,7 @@ void slow_conv_dilated_all_cuda_template(
   std::vector<int64_t> dims(dim);
   std::iota(dims.begin(), dims.end(), 1);
 
-  AT_DISPATCH_FLOATING_TYPES_AND_HALF(
+  AT_DISPATCH_FLOATING_TYPES_AND2(kHalf, kBFloat16,
       input.scalar_type(), "slow_conv_dilated<>", [&] {
         // For each elt in batch, do:
         for (int elt = 0; elt < batchSize; elt++) {
