@@ -6,9 +6,7 @@
 #include <torch/csrc/jit/runtime/vararg_functions.h>
 
 #include <ATen/record_function.h>
-#if defined(PYTORCH_MOBILE_OPERATOR_OBSERVER)
 #include <torch/csrc/jit/mobile/observer.h>
-#endif
 
 namespace torch {
 namespace jit {
@@ -37,15 +35,14 @@ bool InterpreterState::run(Stack& stack) {
     //    std::cout << std::endl;
     switch (inst.op) {
       case OP: {
-#if defined(PYTORCH_MOBILE_OPERATOR_OBSERVER)
-        if (auto debug_info = c10::ThreadLocalDebugInfo::get(
-                c10::DebugInfoKind::MOBILE_RUNTIME_INFO)) {
+        if (at::hasGlobalCallbacks()) {
           if (auto* mobile_debug_info =
-                  dynamic_cast<MobileDebugInfo*>(debug_info.get())) {
+                  static_cast<MobileDebugInfo*>(c10::ThreadLocalDebugInfo::get(
+                      c10::DebugInfoKind::MOBILE_RUNTIME_INFO))) {
             mobile_debug_info->setOpIdx(pc);
           }
         }
-#endif
+
         // TODO(iliacher): remove the workaround after RecordFunction is in
         // Dispatcher
         bool prev_value = isRecordFunctionEnabled();
@@ -53,7 +50,7 @@ bool InterpreterState::run(Stack& stack) {
           // enable only for the RecordFunction
           enableRecordFunction(true);
         }
-        RECORD_FUNCTION(code_->op_names_[inst.X].name, stack);
+        RECORD_USER_SCOPE_WITH_INPUTS(code_->op_names_[inst.X].name, stack);
         if (!prev_value) {
           enableRecordFunction(false);
         }

@@ -20,7 +20,8 @@ void THNN_(RReLU_updateOutput)(
   auto gen = at::get_generator_or_default<at::CUDAGeneratorImpl>(generator, at::cuda::detail::getDefaultCUDAGenerator());
   if (train)
   {
-    input = THCTensor_(newContiguous)(state, input);
+    auto inputTensor = THTensor_wrap(input).contiguous();
+    input = inputTensor.unsafeGetTensorImpl();
     THCTensor_(resizeAs)(state, noise, input);
     scalar_t *input_data = THCTensor_(data)(state, input);
     scalar_t *noise_data = THCTensor_(data)(state, noise);
@@ -30,11 +31,11 @@ void THNN_(RReLU_updateOutput)(
     const uint32_t curand4_engine_calls = 4;
     dim3 grid = NUM_BLOCKS(n);
     uint64_t counter_offset = ((n - 1) / (BLOCK_SIZE * grid.x) + 1) * curand4_engine_calls;
-    std::pair<uint64_t, uint64_t> rng_engine_inputs;
+    at::PhiloxCudaState rng_engine_inputs;
     {
       // See Note [Acquire lock when using random generators]
       std::lock_guard<std::mutex> lock(gen->mutex_);
-      rng_engine_inputs = gen->philox_engine_inputs(counter_offset);
+      rng_engine_inputs = gen->philox_cuda_state(counter_offset);
     }
     if (inplace)
     {
@@ -50,7 +51,6 @@ void THNN_(RReLU_updateOutput)(
         n, rng_engine_inputs, input_data, noise_data, output_data, lower, upper);
     }
     THCudaCheck(cudaGetLastError());
-    THCTensor_(free)(state, input);
   }
   else
   {
@@ -82,7 +82,8 @@ void THNN_(RReLU_updateGradInput)(
   THCUNN_check_nElement(state, input, gradOutput);
   THCUNN_assertSameGPU(state, 4, input, gradOutput, gradInput, noise);
 
-  gradOutput = THCTensor_(newContiguous)(state, gradOutput);
+  auto gradOutputTensor = THTensor_wrap(gradOutput).contiguous();
+  gradOutput = gradOutputTensor.unsafeGetTensorImpl();
 
   if (train && upper - lower > 1E-6)    // e.g. if upper == lower, RReLU behaves like LeakyReLU
   {
@@ -113,8 +114,6 @@ void THNN_(RReLU_updateGradInput)(
       THC_pointwiseApply3<scalar_t, scalar_t, scalar_t>(state, gradInput, gradOutput, input, RReLUupdateGradInputEval_functor<scalar_t>(negSlope));
     }
   }
-
-  THCTensor_(free)(state, gradOutput);
 }
 
 #endif

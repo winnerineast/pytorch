@@ -1,9 +1,20 @@
 #pragma once
 
 #include <ATen/ATen.h>
+#include <ATen/native/ResizeCommon.h>
 #include <TH/THTensor.hpp>
 
 namespace at { namespace native {
+
+// TODO: make all operations that resize given outputs use this function
+//   for consistency and maintainability
+// Resizes outputs
+// Functions accepting output tensors, like with the "out" kwarg, should
+//   call this function to handle resizing their output tensor.
+// Issues a warning if the output tensor has one or more elements and
+//   needs resizing
+// NOTE: In the future the warning will become an error
+CAFFE2_API void resize_output(Tensor& output, IntArrayRef shape);
 
 // These functions are called by native::resize_ as well as (legacy) TH resize.
 // They are not in TH/THTensor.cpp because the at namespace is easier
@@ -17,7 +28,9 @@ static inline void maybe_resize_storage_cpu(TensorImpl* self, int64_t new_size) 
   // (same comment is in Resize.cuh)
   if (new_size > 0) {
     if (!THTensor_getStoragePtr(self)) {
-      THTensor_stealAndSetStoragePtr(self, THStorage_new(self->dtype()));
+      caffe2::TypeMeta dtype = self->dtype();
+      THTensor_stealAndSetStoragePtr(self, THStorage_new());
+      TORCH_INTERNAL_ASSERT(dtype == self->dtype());
     }
     int64_t new_size_bytes =
         (new_size + self->storage_offset()) * self->dtype().itemsize();
@@ -30,7 +43,8 @@ static inline void maybe_resize_storage_cpu(TensorImpl* self, int64_t new_size) 
 inline TensorImpl* resize_impl_cpu_(
     TensorImpl* self,
     IntArrayRef size,
-    c10::optional<IntArrayRef> stride) {
+    c10::optional<IntArrayRef> stride,
+    bool resize_storage = true) {
   if (self->sizes() == size && (!stride || self->strides() == stride)) {
     return self;
   }
@@ -39,20 +53,14 @@ inline TensorImpl* resize_impl_cpu_(
   if (stride) {
     self->set_sizes_and_strides(size, *stride);
     // NB: storage size can be different from numel.
-    for (size_t dim = 0; dim < size.size(); ++dim) {
-      // FIXME: Don't rely on storage_size being negative because this
-      // may not be true for some edge cases.
-      if (size[dim] == 0) {
-        storage_size = 0;
-        break;
-      }
-      storage_size += (size[dim] - 1) * stride.value()[dim];
-    }
+    storage_size = storage_size_for(size, *stride);
   } else {
     self->set_sizes_contiguous(size);
     storage_size = self->numel();
   }
-  maybe_resize_storage_cpu(self, storage_size);
+  if (resize_storage) {
+    maybe_resize_storage_cpu(self, storage_size);
+  }
 
   return self;
 }
@@ -61,7 +69,7 @@ static inline void checkInBoundsForStorage(
     IntArrayRef size,
     IntArrayRef stride,
     int64_t storage_offset,
-    const caffe2::TypeMeta& data_type,
+    const caffe2::TypeMeta data_type,
     const Storage& new_storage) {
   int64_t storage_size_bytes =
       detail::computeStorageNbytes(size, stride, data_type.itemsize());
@@ -108,16 +116,13 @@ static inline void checkSetStorage(Tensor& result, Storage storage, int64_t stor
     TORCH_INTERNAL_ASSERT(storage);
     TORCH_INTERNAL_ASSERT(result.storage());
 
-    // Caffe2 also has uninitialized dtype states, which we disallow here
-    TORCH_INTERNAL_ASSERT(result.storage().dtype() == storage.dtype());
-
     // We used to allow this, but this breaks device caching.
     // Let's put an actual error message for this one.
     TORCH_CHECK(result.storage().device() == storage.device(),
                 "Attempted to set the storage of a tensor on device \"", result.storage().device(),
                 "\" to a storage on different device \"", storage.device(),
                 "\".  This is no longer allowed; the devices must match.");
-    result.unsafeGetTensorImpl()->set_storage(storage);
+    result.unsafeGetTensorImpl()->set_storage_keep_dtype(storage);
   }
 
   // storageOffset
@@ -135,6 +140,7 @@ inline void setStrided(
     IntArrayRef size,
     IntArrayRef stride,
     int64_t storage_offset) {
+  TORCH_CHECK(size.size() == stride.size(), "mismatch in length of strides and shape");
   auto* self_ = self.unsafeGetTensorImpl();
   checkInBoundsForStorage(
       size, stride, storage_offset, self_->dtype(), self_->storage());
@@ -144,9 +150,13 @@ inline void setStrided(
   self_->set_storage_offset(storage_offset);
 
   /* size and stride */
-  AT_ASSERT(size.size() == stride.size());
   if (self_->sizes() == size && self_->strides() == stride) {
     return;
+  }
+  for (auto val : stride) {
+    TORCH_CHECK(val >= 0,
+                "as_strided: Negative strides are not supported at the moment, "
+                "got strides: ", stride);
   }
   self_->set_sizes_and_strides(size, stride);
 }

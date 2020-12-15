@@ -79,6 +79,7 @@ namespace jit {
   _(TK_MINUS_EQ, "-=", "-=")                     \
   _(TK_TIMES_EQ, "*=", "*=")                     \
   _(TK_DIV_EQ, "/=", "/=")                       \
+  _(TK_MOD_EQ, "%=", "%=")                       \
   _(TK_GLOBAL, "global", "global")               \
   _(TK_BUILT_IN, "built-in", "")                 \
   _(TK_SUBSCRIPT, "subscript", "")               \
@@ -106,7 +107,12 @@ namespace jit {
   _(TK_DELETE, "del", "del")                     \
   _(TK_PASS, "pass", "pass")                     \
   _(TK_CLASS_DEF, "class", "class")              \
-  _(TK_IMPORT, "import", "import")
+  _(TK_IMPORT, "import", "import")               \
+  _(TK_WITH, "with", "with")                     \
+  _(TK_WITH_ITEM, "withitem", "")                \
+  _(TK_AS, "as", "as")                           \
+  _(TK_PROP, "property", "")                     \
+  _(TK_ELLIPSIS, "Ellipsis", "Ellipsis")
 
 enum TokenKind {
   // we use characters to represent themselves so skip all valid characters
@@ -371,8 +377,8 @@ struct Token {
 };
 
 struct Lexer {
-  explicit Lexer(const std::shared_ptr<Source>& source)
-      : source(source),
+  explicit Lexer(std::shared_ptr<Source> source)
+      : source(std::move(source)),
         pos(0),
         nesting(0),
         indent_stack(),

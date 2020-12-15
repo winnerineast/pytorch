@@ -28,6 +28,7 @@ inline int getPrecedence(IRNodeType ty) {
     case kPrimitive:
       return 0;
     case kCast:
+    case kBitCast:
       return 2;
     case kAdd:
     case kSub:
@@ -55,7 +56,7 @@ inline int getPrecedence(IRNodeType ty) {
   }
 }
 
-class Buffer;
+class Placeholder;
 
 class Cast : public ExprNode<Cast> {
  public:
@@ -79,6 +80,34 @@ class Cast : public ExprNode<Cast> {
 template <typename T>
 ExprHandle cast(const ExprHandle& src_value) {
   return Cast::make(Dtype(ToDtype<T>(), src_value.dtype().lanes()), src_value);
+}
+
+// This is a bitwise cast, akin to bitcast in LLVM
+class BitCast : public ExprNode<BitCast> {
+ public:
+  const Expr* src_value() const {
+    return src_value_;
+  }
+  static ExprHandle make(Dtype dtype, const ExprHandle& src_value) {
+    return ExprHandle(new BitCast(dtype, src_value.node()));
+  }
+  BitCast(Dtype dtype, const Expr* src_value)
+      : ExprNodeBase(dtype, kBitCast), src_value_(src_value) {
+    TORCH_CHECK(src_value_->dtype().byte_size() == dtype.byte_size());
+  }
+
+  bool isConstant() const override {
+    return src_value_->isConstant();
+  }
+
+ private:
+  const Expr* src_value_;
+};
+
+template <typename T>
+ExprHandle bitcast(const ExprHandle& src_value) {
+  return BitCast::make(
+      Dtype(ToDtype<T>(), src_value.dtype().lanes()), src_value);
 }
 
 // Represent the expression node for binary operators.
@@ -391,26 +420,28 @@ class TORCH_API Load : public ExprNode<Load> {
     return buf_;
   }
   static ExprHandle make(
-      const Buffer& buffer,
+      Dtype dtype,
+      const BufHandle& buf,
       const std::vector<ExprHandle>& indices,
       const ExprHandle& mask);
   static ExprHandle make(
-      Dtype dtype,
       const BufHandle& buf,
       const std::vector<ExprHandle>& indices,
       const ExprHandle& mask);
 
   Load(
-      const Buffer& buffer,
+      Dtype dtype,
+      const Buf* base_handle,
       const std::vector<const Expr*>& indices,
       const Expr* mask);
   Load(
-      Dtype dtype,
       const Buf* base_handle,
       const std::vector<const Expr*>& indices,
       const Expr* mask);
 
  private:
+  void verify_dtypes() const;
+
   const Buf* buf_;
   std::vector<const Expr*> indices_;
   const Expr* mask_;
@@ -577,13 +608,6 @@ class TORCH_API CompareSelect : public ExprNode<CompareSelect> {
         lhs.node(), rhs.node(), ret_val1.node(), ret_val2.node(), cmp_op));
   }
 
- private:
-  const Expr* lhs_;
-  const Expr* rhs_;
-  const Expr* ret_val1_;
-  const Expr* ret_val2_;
-  CompareSelectOperation compare_op_;
-
   CompareSelect(
       const Expr* lhs,
       const Expr* rhs,
@@ -600,6 +624,21 @@ class TORCH_API CompareSelect : public ExprNode<CompareSelect> {
       throw malformed_input("bad dtype in CompareSelect");
     }
   }
+
+  CompareSelect(const Expr* lhs, const Expr* rhs, CompareSelectOperation cmp_op)
+      : ExprNodeBase(kInt),
+        lhs_(lhs),
+        rhs_(rhs),
+        ret_val1_(new IntImm(1)),
+        ret_val2_(new IntImm(0)),
+        compare_op_(cmp_op) {}
+
+ private:
+  const Expr* lhs_;
+  const Expr* rhs_;
+  const Expr* ret_val1_;
+  const Expr* ret_val2_;
+  CompareSelectOperation compare_op_;
 };
 
 enum IntrinsicsOp {
@@ -613,6 +652,7 @@ enum IntrinsicsOp {
   kSinh,
   kCosh,
   kTanh,
+  kSigmoid,
   kExp,
   kExpm1,
   kFabs,
@@ -689,6 +729,8 @@ class Intrinsics : public CallNode<Intrinsics> {
         return "cosh";
       case kTanh:
         return "tanh";
+      case kSigmoid:
+        return "sigmoid";
       case kExp:
         return "exp";
       case kFabs:
@@ -799,6 +841,8 @@ class Intrinsics : public CallNode<Intrinsics> {
 
 class Polynomial;
 class Term;
+class MaxTerm;
+class MinTerm;
 
 class FunctionCall;
 

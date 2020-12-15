@@ -40,7 +40,7 @@ if(NOT CMAKE_SYSTEM_PROCESSOR)
   else()
     message(FATAL_ERROR "CMAKE_SYSTEM_PROCESSOR is not defined")
   endif()
-elseif(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(i[3-6]86|x86_64|armv[5-8].*|aarch64)$")
+elseif(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(i[3-6]86|x86_64|armv[5-8].*|aarch64|arm64)$")
   message(FATAL_ERROR "Unrecognized CMAKE_SYSTEM_PROCESSOR = ${CMAKE_SYSTEM_PROCESSOR}")
 endif()
 
@@ -156,6 +156,7 @@ set(PYTORCH_QNNPACK_INIT_SRCS
 
 set(PYTORCH_QNNPACK_EXEC_SRCS
   src/conv-run.cc
+  src/deconv-run.cc
   src/fc-run.cc
   src/fc-dynamic-run.cc
   src/indirection.c
@@ -175,7 +176,9 @@ set(PYTORCH_QNNPACK_ARM_NEON_UKERNELS
   src/q8conv/4x8-neon.c
   src/q8conv/8x8-neon.c
   src/q8dwconv/mp8x25-neon.c
+  src/q8dwconv/mp8x25-neon-per-channel.c
   src/q8dwconv/up8x9-neon.c
+  src/q8dwconv/up8x9-neon-per-channel.c
   src/q8gavgpool/mp8x7p7q-neon.c
   src/q8gavgpool/up8x7-neon.c
   src/q8gavgpool/up8xm-neon.c
@@ -201,6 +204,7 @@ set(PYTORCH_QNNPACK_AARCH32_ASM_UKERNELS
   src/hgemm/8x8-aarch32-neonfp16arith.S
   src/q8conv/4x8-aarch32-neon.S
   src/q8dwconv/up8x9-aarch32-neon.S
+  src/q8dwconv/up8x9-aarch32-neon-per-channel.S
   src/q8gemm/4x8-aarch32-neon.S
   src/q8gemm/4x8-dq-aarch32-neon.S
   src/q8gemm/4x8c2-xzp-aarch32-neon.S)
@@ -216,7 +220,9 @@ set(PYTORCH_QNNPACK_X86_SSE2_UKERNELS
   src/q8avgpool/up8xm-sse2.c
   src/q8conv/4x4c2-sse2.c
   src/q8dwconv/mp8x25-sse2.c
+  src/q8dwconv/mp8x25-sse2-per-channel.c
   src/q8dwconv/up8x9-sse2.c
+  src/q8dwconv/up8x9-sse2-per-channel.c
   src/q8gavgpool/mp8x7p7q-sse2.c
   src/q8gavgpool/up8x7-sse2.c
   src/q8gavgpool/up8xm-sse2.c
@@ -238,7 +244,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^armv[5-8]" OR IOS_ARCH MATCHES "^armv7")
   list(APPEND PYTORCH_QNNPACK_UKERNELS ${PYTORCH_QNNPACK_ARM_NEON_UKERNELS})
   list(APPEND PYTORCH_QNNPACK_UKERNELS ${PYTORCH_QNNPACK_AARCH32_ASM_UKERNELS})
 endif()
-if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64" OR IOS_ARCH MATCHES "^arm64.*")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$" OR IOS_ARCH MATCHES "^arm64.*")
   list(APPEND PYTORCH_QNNPACK_UKERNELS ${PYTORCH_QNNPACK_ARM_NEON_UKERNELS})
   list(APPEND PYTORCH_QNNPACK_UKERNELS ${PYTORCH_QNNPACK_AARCH64_ASM_UKERNELS})
 endif()
@@ -265,7 +271,7 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^armv[5-8]" OR IOS_ARCH MATCHES "^armv7")
     set_property(SOURCE ${PYTORCH_QNNPACK_AARCH32_ASM_UKERNELS} APPEND_STRING PROPERTY COMPILE_FLAGS " -arch ${IOS_ARCH} ")
   endif()
 endif()
-if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64" OR IOS_ARCH MATCHES "^arm64.*")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$" OR IOS_ARCH MATCHES "^arm64.*")
   set_property(SOURCE ${PYTORCH_QNNPACK_ARM_NEON_UKERNELS} APPEND_STRING PROPERTY COMPILE_FLAGS " -O2 ")
   if(IOS)
     set_property(SOURCE ${PYTORCH_QNNPACK_AARCH64_ASM_UKERNELS} APPEND_STRING PROPERTY COMPILE_FLAGS " -arch ${IOS_ARCH} ")
@@ -429,7 +435,7 @@ if(PYTORCH_QNNPACK_BUILD_TESTS)
     CXX_STANDARD_REQUIRED YES
     CXX_EXTENSIONS NO)
   target_include_directories(deconvolution-test PRIVATE src test)
-  target_link_libraries(deconvolution-test PRIVATE pytorch_qnnpack cpuinfo gtest gtest_main)
+  target_link_libraries(deconvolution-test PRIVATE pytorch_qnnpack cpuinfo fp16 gtest gtest_main)
   add_test(deconvolution-test deconvolution-test)
 
   add_executable(fully-connected-test test/fully-connected.cc)

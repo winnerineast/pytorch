@@ -2,6 +2,7 @@
 
 #include <c10/core/thread_pool.h>
 #include <c10d/ProcessGroup.hpp>
+#include <torch/csrc/distributed/rpc/request_callback.h>
 #include <torch/csrc/distributed/rpc/rpc_agent.h>
 
 #include <atomic>
@@ -56,13 +57,14 @@ struct RecvWork {
   torch::Tensor payload_;
 };
 
-class ProcessGroupAgent : public RpcAgent {
+class TORCH_API ProcessGroupAgent : public RpcAgent {
  public:
   ProcessGroupAgent(
       std::string workerName,
-      std::shared_ptr<c10d::ProcessGroup> pg,
+      c10::intrusive_ptr<::c10d::ProcessGroup> pg,
       int numSendRecvThreads,
-      std::chrono::milliseconds rpcTimeout);
+      std::chrono::milliseconds rpcTimeout,
+      std::unique_ptr<RequestCallback> cb);
 
   const WorkerInfo& getWorkerInfo(const std::string& workerName) const override;
 
@@ -93,13 +95,10 @@ class ProcessGroupAgent : public RpcAgent {
 
   // put SendWork into a queue and notify the worker thread
   virtual void enqueueSend(SendWork work);
+  // Bypass handleSend() logic and send a message to self rank
+  virtual void sendToSelf(Message&& message);
 
  private:
-  using steady_clock_time_point =
-      std::chrono::time_point<std::chrono::steady_clock>;
-
-  static const steady_clock_time_point kInfiniteTimeoutTimePoint;
-
   class MessageCounter {
    public:
     explicit MessageCounter(int worldSize);
@@ -210,7 +209,7 @@ class ProcessGroupAgent : public RpcAgent {
     return ++nextId_;
   }
 
-  std::shared_ptr<c10d::ProcessGroup> pg_;
+  c10::intrusive_ptr<::c10d::ProcessGroup> pg_;
   // worker name -> rank
   std::unordered_map<std::string, worker_id_t> nameMap_;
   std::vector<WorkerInfo> allWorkerInfo_;
@@ -231,14 +230,14 @@ class ProcessGroupAgent : public RpcAgent {
   // Lock and shared ptr to currently pending work, set in listenloop() and
   // interruptible in shutdown().
   std::mutex recvWorkMutex_;
-  std::shared_ptr<c10d::ProcessGroup::Work> recvWork_;
+  c10::intrusive_ptr<c10d::ProcessGroup::Work> recvWork_;
   // Map of dst rank to current oustanding sends that we are waiting on. In the
   // case of a call to ::shutdown() while we are still waiting on these sends,
   // the pending sends contained in this map will be aborted, allowing the
   // waiting thread to be unblocked.
   std::unordered_map<
       worker_id_t,
-      std::set<std::shared_ptr<c10d::ProcessGroup::Work>>>
+      std::set<c10::intrusive_ptr<c10d::ProcessGroup::Work>>>
       currentPendingSends_;
   // Lock to serialize access to the above map.
   std::mutex pendingSendMutex_;

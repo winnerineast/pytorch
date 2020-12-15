@@ -1,6 +1,14 @@
 import ctypes
 import torch
 
+from ._utils import _dummy_type
+
+
+if not hasattr(torch._C, '_CudaStreamBase'):
+    # Define dummy base classes
+    torch._C.__dict__['_CudaStreamBase'] = _dummy_type('_CudaStreamBase')
+    torch._C.__dict__['_CudaEventBase'] = _dummy_type('_CudaEventBase')
+    torch._C.__dict__['_CudaGraphBase'] = _dummy_type('_CudaGraphBase')
 
 class Stream(torch._C._CudaStreamBase):
     r"""Wrapper around a CUDA stream.
@@ -13,8 +21,12 @@ class Stream(torch._C._CudaStreamBase):
         device(torch.device or int, optional): a device on which to allocate
             the stream. If :attr:`device` is ``None`` (default) or a negative
             integer, this will use the current device.
-        priority(int, optional): priority of the stream. Lower numbers
-                                 represent higher priorities.
+        priority(int, optional): priority of the stream. Can be either
+            -1 (high priority) or 0 (low priority). By default, streams have
+            priority 0.
+
+    .. note:: Although CUDA versions >= 11 support more than two levels of
+        priorities, in PyTorch, we only support two levels of priorities.
     """
 
     def __new__(cls, device=None, priority=0, **kwargs):
@@ -34,7 +46,7 @@ class Stream(torch._C._CudaStreamBase):
            operations are affected.
 
         .. _CUDA Stream documentation:
-           http://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__STREAM.html
+           https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__STREAM.html
         """
         event.wait(self)
 
@@ -190,3 +202,5 @@ class Event(torch._C._CudaEventBase):
             return '<torch.cuda.Event {0:#x}>'.format(self._as_parameter_.value)
         else:
             return '<torch.cuda.Event uninitialized>'
+
+_Graph = torch._C._CudaGraphBase

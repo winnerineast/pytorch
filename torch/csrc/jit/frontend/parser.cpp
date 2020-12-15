@@ -73,6 +73,7 @@ struct ParserImpl {
       case TK_MINUS_EQ:
       case TK_TIMES_EQ:
       case TK_DIV_EQ:
+      case TK_MOD_EQ:
       case TK_NEWLINE:
       case '=':
       case ')':
@@ -162,6 +163,7 @@ struct ParserImpl {
       case TK_STRINGLITERAL: {
         prefix = parseConcatenatedStringLiterals();
       } break;
+      case TK_ELLIPSIS:
       case TK_DOTS: {
         prefix = Dots::create(L.cur().range);
         L.next();
@@ -191,7 +193,8 @@ struct ParserImpl {
       case TK_PLUS_EQ:
       case TK_MINUS_EQ:
       case TK_TIMES_EQ:
-      case TK_DIV_EQ: {
+      case TK_DIV_EQ:
+      case TK_MOD_EQ: {
         int modifier = L.next().text()[0];
         return create_compound(modifier, r, {});
       } break;
@@ -385,7 +388,9 @@ struct ParserImpl {
     auto subscript_exprs =
         parseList('[', ',', ']', &ParserImpl::parseSubscriptExp);
 
-    return Subscript::create(range, Expr(value), subscript_exprs);
+    const auto whole_range =
+        SourceRange(range.source(), range.start(), L.cur().range.start());
+    return Subscript::create(whole_range, Expr(value), subscript_exprs);
   }
 
   Maybe<Expr> maybeParseTypeAnnotation() {
@@ -553,10 +558,14 @@ struct ParserImpl {
         return parseFunction(/*is_method=*/in_class);
       }
       case TK_DELETE: {
-        L.expect(TK_DELETE);
-        auto expr = parseExp();
+        auto range = L.next().range;
+        auto targets =
+            parseList(TK_NOTHING, ',', TK_NOTHING, &ParserImpl::parseExp);
         L.expect(TK_NEWLINE);
-        return Delete::create(expr);
+        return Delete::create(range, targets);
+      }
+      case TK_WITH: {
+        return parseWith();
       }
       default: {
         auto lhs = parseExpOrExpTuple();
@@ -569,6 +578,25 @@ struct ParserImpl {
       }
     }
   }
+
+  WithItem parseWithItem() {
+    auto target = parseExp();
+
+    if (L.cur().kind == TK_AS) {
+      // If the current token is TK_AS, this with item is of the form
+      // "expression as target".
+      auto token = L.expect(TK_AS);
+      Ident ident = parseIdent();
+      auto var = Var::create(ident.range(), ident);
+      return WithItem::create(
+          token.range, target, Maybe<Var>::create(ident.range(), var));
+    } else {
+      // If not, this with item is of the form "expression".
+      return WithItem::create(
+          target.range(), target, Maybe<Var>::create(target.range()));
+    }
+  }
+
   TreeRef parseIf(bool expect_if = true) {
     auto r = L.cur().range;
     if (expect_if)
@@ -606,6 +634,16 @@ struct ParserImpl {
     auto itrs = parseList(TK_NOTHING, ',', ':', &ParserImpl::parseExp);
     auto body = parseStatements(/*expect_indent=*/true);
     return For::create(r, targets, itrs, body);
+  }
+
+  TreeRef parseWith() {
+    auto r = L.cur().range;
+    // Parse "with expression [as target][, expression [as target]]*:".
+    L.expect(TK_WITH);
+    auto targets = parseList(TK_NOTHING, ',', ':', &ParserImpl::parseWithItem);
+    // Parse the body.
+    auto body = parseStatements(/*expect_indent=*/true);
+    return With::create(r, targets, body);
   }
 
   TreeRef parseStatements(bool expect_indent, bool in_class = false) {
